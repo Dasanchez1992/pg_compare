@@ -7,7 +7,7 @@
        ({{ run.created_at|date:"Y-m-d H:i" }})?</p>
     <form method="post">
         {% csrf_token %}
-        <button class="btn danger" type="submit">Sí, eliminar</button>
+        <button class="btn danger solid" type="submit">Sí, eliminar</button>
         <a class="btn secondary" href="{% url 'comparison_list' %}">Cancelar</a>
     </form>
 </div>

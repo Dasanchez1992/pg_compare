@@ -7,7 +7,7 @@
        Las comparaciones ya guardadas se conservan en el historial.</p>
     <form method="post">
         {% csrf_token %}
-        <button class="btn danger" type="submit">Sí, eliminar</button>
+        <button class="btn danger solid" type="submit">Sí, eliminar</button>
         <a class="btn secondary" href="{% url 'project_list' %}">Cancelar</a>
     </form>
 </div>

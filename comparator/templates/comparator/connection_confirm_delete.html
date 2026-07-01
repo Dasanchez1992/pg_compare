@@ -6,7 +6,7 @@
     <p>¿Seguro que deseas eliminar <strong>{{ conn.name }}</strong>?</p>
     <form method="post">
         {% csrf_token %}
-        <button class="btn danger" type="submit">Sí, eliminar</button>
+        <button class="btn danger solid" type="submit">Sí, eliminar</button>
         <a class="btn secondary" href="{% url 'connection_list' %}">Cancelar</a>
     </form>
 </div>

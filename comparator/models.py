@@ -93,6 +93,7 @@ class ComparisonRun(models.Model):
     )
     db1_name = models.CharField("BD1 (destino)", max_length=100)
     db2_name = models.CharField("BD2 (referencia)", max_length=100)
+    db1_schema = models.CharField("Esquema BD1", max_length=255, default="public")
     created_at = models.DateTimeField("Fecha", auto_now_add=True)
     total_changes = models.PositiveIntegerField("Diferencias", default=0)
 

@@ -92,8 +92,10 @@ GROUP_ORDER = [
     "columns_alter",
     "columns_drop",
     "indexes_add",
+    "indexes_alter",
     "indexes_drop",
     "constraints_add",
+    "constraints_alter",
     "constraints_drop",
 ]
 
@@ -104,8 +106,10 @@ GROUP_LABELS = {
     "columns_alter": "Columnas modificadas (alterar)",
     "columns_drop": "Columnas que sobran en BD1 (DROP)",
     "indexes_add": "Índices a crear",
+    "indexes_alter": "Índices con definición diferente (recrear)",
     "indexes_drop": "Índices que sobran (DROP)",
     "constraints_add": "Constraints a agregar",
+    "constraints_alter": "Constraints con definición diferente (recrear)",
     "constraints_drop": "Constraints que sobran (DROP)",
 }
 
@@ -119,8 +123,10 @@ GROUP_META = {
     "columns_alter":     ("Columna",    "Diferente", "b-chg"),
     "columns_drop":      ("Columna",    "Sobra",     "b-del"),
     "indexes_add":       ("Índice",     "Nuevo",     "b-add"),
+    "indexes_alter":     ("Índice",     "Diferente", "b-chg"),
     "indexes_drop":      ("Índice",     "Sobra",     "b-del"),
     "constraints_add":   ("Constraint", "Nuevo",     "b-add"),
+    "constraints_alter": ("Constraint", "Diferente", "b-chg"),
     "constraints_drop":  ("Constraint", "Sobra",     "b-del"),
 }
 
@@ -223,6 +229,14 @@ def compare(source, target, db1_name="BD1", db2_name="BD2"):
         add("indexes_add", f"idx_add:{table}:{name}", table, name,
             f"{source.indexes[key]['def']} · solo existe en {db2_name}",
             f"{source.indexes[key]['def']};")
+    for key in sorted(set(source.indexes) & set(target.indexes)):
+        table, name = key
+        s_def = source.indexes[key]["def"]
+        t_def = target.indexes[key]["def"]
+        if s_def != t_def:
+            add("indexes_alter", f"idx_alter:{table}:{name}", table, name,
+                f"definición: {t_def} → {s_def}",
+                f"DROP INDEX {_q(name)};\n{s_def};")
     for key in sorted(set(target.indexes) - set(source.indexes)):
         table, name = key
         add("indexes_drop", f"idx_drop:{table}:{name}", table, name,
@@ -238,6 +252,15 @@ def compare(source, target, db1_name="BD1", db2_name="BD2"):
         add("constraints_add", f"con_add:{table}:{name}", table, name,
             f"{c['type']} — {c['def']} · solo existe en {db2_name}",
             f"ALTER TABLE {_q(table)} ADD CONSTRAINT {_q(name)} {c['def']};")
+    for key in sorted(set(source.constraints) & set(target.constraints)):
+        table, name = key
+        s = source.constraints[key]
+        t = target.constraints[key]
+        if s["def"] != t["def"]:
+            add("constraints_alter", f"con_alter:{table}:{name}", table, name,
+                f"{s['type']} — definición: {t['def']} → {s['def']}",
+                f"ALTER TABLE {_q(table)} DROP CONSTRAINT {_q(name)};\n"
+                f"ALTER TABLE {_q(table)} ADD CONSTRAINT {_q(name)} {s['def']};")
     for key in sorted(set(target.constraints) - set(source.constraints)):
         table, name = key
         c = target.constraints[key]
@@ -249,10 +272,12 @@ def compare(source, target, db1_name="BD1", db2_name="BD2"):
     return {"groups": groups, "rows": rows, "sql_by_id": sql_by_id, "total_changes": total}
 
 
-def build_script(db1_name, db2_name, sql_by_id, selected_ids):
+def build_script(db1_name, db2_name, sql_by_id, selected_ids, schema="public"):
     """Arma el script SQL con solo los cambios seleccionados.
 
     `selected_ids` se filtra respetando el orden canónico de `sql_by_id`.
+    `schema` es el esquema de BD1: el script fija el search_path para que
+    las sentencias (que van sin calificar) apliquen sobre ese esquema.
     """
     selected = set(selected_ids)
     lines = [
@@ -260,10 +285,13 @@ def build_script(db1_name, db2_name, sql_by_id, selected_ids):
         "-- Script ALTER generado por Comparador de BD",
         f"-- Referencia (BD2): {db2_name}",
         f"-- A modificar (BD1): {db1_name}",
+        f"-- Esquema: {schema}",
         "-- Solo se incluyen los cambios seleccionados.",
         "-- Las sentencias DROP van comentadas por seguridad.",
         "-- ============================================================",
         "BEGIN;",
+        "",
+        f"SET LOCAL search_path TO {_q(schema)};",
         "",
     ]
     included = 0

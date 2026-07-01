@@ -31,7 +31,6 @@
             <button type="button" class="btn secondary" onclick="toggleAll(true)">Marcar todo</button>
             <button type="button" class="btn secondary" onclick="toggleAll(false)">Desmarcar todo</button>
             <button class="btn" type="submit">⚙ Generar script</button>
-            {% if script %}<button type="button" class="btn secondary" onclick="openModal()">👁 Ver script</button>{% endif %}
         </div>
 
         <div class="grid-wrap">
@@ -61,13 +60,14 @@
                                 <option>Nuevo</option><option>Diferente</option><option>Sobra</option>
                             </select>
                         </th>
-                        <th></th>
+                        <th><input type="text" id="f-table" placeholder="Filtrar por tabla..."></th>
                         <th></th>
                     </tr>
                 </thead>
                 <tbody>
                 {% for item in result.rows %}
                     <tr data-id="{{ item.id }}" data-name="{{ item.name|lower }}"
+                        data-table="{{ item.table|lower }}"
                         data-type="{{ item.type }}" data-status="{{ item.status }}"
                         onclick="selectRow(this)">
                         <td onclick="event.stopPropagation();">
@@ -145,11 +145,13 @@ function toggleAll(state) {
 
 function applyFilters() {
     const name = document.getElementById('f-name').value.toLowerCase();
+    const table = document.getElementById('f-table').value.toLowerCase();
     const type = document.getElementById('f-type').value;
     const status = document.getElementById('f-status').value;
     let visible = 0;
     document.querySelectorAll('#grid tbody tr').forEach(function (tr) {
         const ok = (!name || tr.dataset.name.includes(name))
+                && (!table || tr.dataset.table.includes(table))
                 && (!type || tr.dataset.type === type)
                 && (!status || tr.dataset.status === status);
         tr.style.display = ok ? '' : 'none';
@@ -157,7 +159,7 @@ function applyFilters() {
     });
     document.getElementById('visible-count').textContent = visible + ' objeto(s)';
 }
-['f-name', 'f-type', 'f-status'].forEach(function (id) {
+['f-name', 'f-table', 'f-type', 'f-status'].forEach(function (id) {
     document.getElementById(id).addEventListener('input', applyFilters);
 });
 applyFilters();

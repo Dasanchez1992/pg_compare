@@ -1,6 +1,7 @@
 from django.contrib import messages
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_POST
 
 from . import diff, introspect
 from .forms import ComparisonProjectForm, CompareForm, DatabaseConnectionForm
@@ -81,6 +82,7 @@ def run_comparison(db1, db2, project=None):
         db2_conn=db2,
         db1_name=db1.name,
         db2_name=db2.name,
+        db1_schema=db1.schema,
         total_changes=result["total_changes"],
         rows=result["rows"],
         sql_by_id=result["sql_by_id"],
@@ -138,11 +140,15 @@ def comparison_detail(request, pk):
     return render(request, "comparator/compare_result.html", context)
 
 
+@require_POST
 def generate_script(request, pk):
     """Arma el script SQL solo con los cambios seleccionados y lo guarda."""
     run = get_object_or_404(ComparisonRun, pk=pk)
-    selected_ids = request.POST.getlist("changes") if request.method == "POST" else []
-    script = diff.build_script(run.db1_name, run.db2_name, run.sql_by_id, selected_ids)
+    selected_ids = request.POST.getlist("changes")
+    script = diff.build_script(
+        run.db1_name, run.db2_name, run.sql_by_id, selected_ids,
+        schema=run.db1_schema,
+    )
 
     run.script = script
     run.selected_ids = selected_ids

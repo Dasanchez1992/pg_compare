@@ -2,12 +2,14 @@
 {% block title %}Conexiones{% endblock %}
 {% block content %}
 <div class="card">
-    <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h1>Conexiones registradas</h1>
+    <div class="toolbar">
+        <h1 style="margin:0;">Conexiones registradas</h1>
+        <span class="spacer"></span>
         <a class="btn" href="{% url 'connection_create' %}">+ Nueva conexión</a>
     </div>
     <p class="muted">Guarda tantas bases de datos como necesites y luego selecciónalas para comparar.</p>
     {% if connections %}
+    <div class="table-wrap">
     <table>
         <thead>
             <tr><th>Nombre</th><th>Host</th><th>Puerto</th><th>Base</th><th>Usuario</th><th>Esquema</th><th></th></tr>
@@ -21,15 +23,16 @@
                 <td>{{ c.dbname }}</td>
                 <td>{{ c.user }}</td>
                 <td>{{ c.schema }}</td>
-                <td style="white-space:nowrap;">
-                    <a class="btn secondary" href="{% url 'connection_test' c.pk %}">Probar</a>
-                    <a class="btn secondary" href="{% url 'connection_edit' c.pk %}">Editar</a>
-                    <a class="btn danger" href="{% url 'connection_delete' c.pk %}">Eliminar</a>
+                <td style="white-space:nowrap; text-align:right;">
+                    <a class="btn secondary sm" href="{% url 'connection_test' c.pk %}">🔌 Probar</a>
+                    <a class="btn secondary sm" href="{% url 'connection_edit' c.pk %}">✎ Editar</a>
+                    <a class="btn danger sm" href="{% url 'connection_delete' c.pk %}">Eliminar</a>
                 </td>
             </tr>
         {% endfor %}
         </tbody>
     </table>
+    </div>
     {% else %}
     <p>No hay conexiones aún. <a href="{% url 'connection_create' %}">Crea la primera</a>.</p>
     {% endif %}
