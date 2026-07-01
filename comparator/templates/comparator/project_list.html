@@ -1,0 +1,35 @@
+{% extends "comparator/base.html" %}
+{% block title %}Proyectos de comparación{% endblock %}
+{% block content %}
+<div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h1>Proyectos de comparación</h1>
+        <a class="btn" href="{% url 'project_create' %}">+ Nuevo proyecto</a>
+    </div>
+    <p class="muted">Configura el par de bases una sola vez y luego solo pulsa <strong>Comparar ahora</strong> cada vez que quieras una comparación nueva.</p>
+    {% if projects %}
+    <table>
+        <thead>
+            <tr><th>Proyecto</th><th>BD1 (destino)</th><th>BD2 (referencia)</th><th>Comparaciones</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for p in projects %}
+            <tr>
+                <td><a href="{% url 'comparison_list' %}?project={{ p.pk }}"><strong>{{ p.name }}</strong></a></td>
+                <td>{{ p.db1.name }}</td>
+                <td>{{ p.db2.name }}</td>
+                <td><a href="{% url 'comparison_list' %}?project={{ p.pk }}">{{ p.runs.count }}</a></td>
+                <td style="white-space:nowrap;">
+                    <a class="btn" href="{% url 'project_compare' p.pk %}">▶ Comparar ahora</a>
+                    <a class="btn secondary" href="{% url 'comparison_list' %}?project={{ p.pk }}">Historial</a>
+                    <a class="btn danger" href="{% url 'project_delete' p.pk %}">Eliminar</a>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>No hay proyectos aún. <a href="{% url 'project_create' %}">Crea el primero</a> o haz una <a href="{% url 'compare' %}">comparación ad hoc</a>.</p>
+    {% endif %}
+</div>
+{% endblock %}

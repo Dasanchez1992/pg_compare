@@ -1,0 +1,25 @@
+{% extends "comparator/base.html" %}
+{% block title %}Comparar bases de datos{% endblock %}
+{% block content %}
+<div class="card" style="max-width:700px;">
+    <h1>Comparar bases de datos</h1>
+    <p class="muted">
+        Se comparan columnas, índices y constraints. El script ALTER resultante
+        transforma <strong>BD1</strong> para que su estructura quede igual a <strong>BD2</strong>.
+    </p>
+    <form method="post">
+        {% csrf_token %}
+        {% for field in form %}
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% for error in field.errors %}<div class="msg error">{{ error }}</div>{% endfor %}
+        {% endfor %}
+        {% if form.non_field_errors %}
+            {% for error in form.non_field_errors %}<div class="msg error">{{ error }}</div>{% endfor %}
+        {% endif %}
+        <div style="margin-top:1rem;">
+            <button class="btn" type="submit">Comparar →</button>
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,47 @@
+{% extends "comparator/base.html" %}
+{% block title %}Historial de comparaciones{% endblock %}
+{% block content %}
+<div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h1>Historial de comparaciones{% if project %} <span class="muted">— {{ project.name }}</span>{% endif %}</h1>
+        <div>
+            {% if project %}<a class="btn" href="{% url 'project_compare' project.pk %}">▶ Comparar ahora</a>{% endif %}
+            <a class="btn secondary" href="{% url 'compare' %}">+ Nueva (ad hoc)</a>
+        </div>
+    </div>
+    {% if project %}
+        <p class="muted">Mostrando solo comparaciones del proyecto <strong>{{ project.name }}</strong>
+           ({{ project.db1.name }} → {{ project.db2.name }}).
+           <a href="{% url 'comparison_list' %}">Ver todo el historial</a></p>
+    {% else %}
+        <p class="muted">Cada comparación queda guardada aquí para consultarla o regenerar su script cuando quieras.</p>
+    {% endif %}
+    {% if runs %}
+    <table>
+        <thead>
+            <tr><th>Fecha</th><th>Proyecto</th><th>BD1 (destino)</th><th>BD2 (referencia)</th><th>Diferencias</th><th>Script</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for run in runs %}
+            <tr>
+                <td>{{ run.created_at|date:"Y-m-d H:i" }}</td>
+                <td>{% if run.project %}{{ run.project.name }}{% else %}<span class="muted">ad hoc</span>{% endif %}</td>
+                <td>{{ run.db1_name }}</td>
+                <td>{{ run.db2_name }}</td>
+                <td>{{ run.total_changes }}</td>
+                <td>{% if run.script %}<span class="badge b-add">generado ({{ run.selected_ids|length }})</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+                <td style="white-space:nowrap;">
+                    <a class="btn secondary" href="{% url 'comparison_detail' run.pk %}">Ver</a>
+                    {% if run.can_rerun %}<a class="btn secondary" href="{% url 'comparison_rerun' run.pk %}">🔄</a>{% endif %}
+                    {% if run.script %}<a class="btn secondary" href="{% url 'download_script' run.pk %}">⬇ .sql</a>{% endif %}
+                    <a class="btn danger" href="{% url 'comparison_delete' run.pk %}">Eliminar</a>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>Aún no hay comparaciones guardadas. <a href="{% url 'compare' %}">Ejecuta la primera</a>.</p>
+    {% endif %}
+</div>
+{% endblock %}

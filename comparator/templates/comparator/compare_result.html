@@ -1,0 +1,171 @@
+{% extends "comparator/base.html" %}
+{% block title %}Resultado de comparación{% endblock %}
+{% block content %}
+
+<div class="card">
+    <div class="toolbar">
+        <h1 style="margin:0;">{{ db1 }} <span class="muted">v</span> {{ db2 }}</h1>
+        {% if run %}<span class="muted">Guardada el {{ run.created_at|date:"Y-m-d H:i" }}</span>{% endif %}
+        <span class="spacer"></span>
+        {% if run.can_rerun %}<a class="btn" href="{% url 'comparison_rerun' run.pk %}">🔄 Re-ejecutar</a>{% endif %}
+        <a class="btn secondary" href="{% url 'comparison_list' %}">Historial</a>
+        <a class="btn secondary" href="{% url 'compare' %}">← Nueva comparación</a>
+    </div>
+    <p class="muted">Total de diferencias: <strong>{{ result.total_changes }}</strong></p>
+</div>
+
+{% if result.total_changes == 0 %}
+    <div class="card"><p>✅ No se encontraron diferencias estructurales. Las bases son iguales.</p></div>
+{% else %}
+
+{{ result.sql_by_id|json_script:"sql-map" }}
+
+<form method="post" action="{% url 'generate_script' run.pk %}">
+    {% csrf_token %}
+
+    <div class="card">
+        <div class="toolbar">
+            <strong>Objetos</strong>
+            <span class="muted" id="visible-count"></span>
+            <span class="spacer"></span>
+            <button type="button" class="btn secondary" onclick="toggleAll(true)">Marcar todo</button>
+            <button type="button" class="btn secondary" onclick="toggleAll(false)">Desmarcar todo</button>
+            <button class="btn" type="submit">⚙ Generar script</button>
+        </div>
+
+        <div class="grid-wrap">
+            <table class="grid" id="grid">
+                <thead>
+                    <tr>
+                        <th style="width:2rem;"><input type="checkbox" id="check-header" onclick="toggleAll(this.checked)"></th>
+                        <th>Nombre</th>
+                        <th>Tipo</th>
+                        <th>Estado</th>
+                        <th>Tabla / Esquema</th>
+                        <th>Detalle</th>
+                    </tr>
+                    <tr class="filters">
+                        <th></th>
+                        <th><input type="text" id="f-name" placeholder="Filtrar por nombre..."></th>
+                        <th>
+                            <select id="f-type">
+                                <option value="">(todos)</option>
+                                <option>Tabla</option><option>Columna</option>
+                                <option>Índice</option><option>Constraint</option>
+                            </select>
+                        </th>
+                        <th>
+                            <select id="f-status">
+                                <option value="">(todos)</option>
+                                <option>Nuevo</option><option>Diferente</option><option>Sobra</option>
+                            </select>
+                        </th>
+                        <th></th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for item in result.rows %}
+                    <tr data-id="{{ item.id }}" data-name="{{ item.name|lower }}"
+                        data-type="{{ item.type }}" data-status="{{ item.status }}"
+                        onclick="selectRow(this)">
+                        <td onclick="event.stopPropagation();">
+                            <input type="checkbox" name="changes" value="{{ item.id }}" style="width:auto;"
+                                {% if selected_ids and item.id in selected_ids %}checked{% endif %}>
+                        </td>
+                        <td>{{ item.name }}</td>
+                        <td>{{ item.type }}</td>
+                        <td><span class="badge {{ item.status_class }}">{{ item.status }}</span></td>
+                        <td>{{ item.table }}</td>
+                        <td><span class="muted">{{ item.detail }}</span></td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</form>
+
+<!-- Panel inferior: SQL del objeto seleccionado -->
+<div class="card">
+    <h3 style="margin-top:0;">SQL de la diferencia <span class="muted" id="detail-name"></span></h3>
+    <pre id="detail-sql">Selecciona una fila de la grilla para ver su SQL.</pre>
+</div>
+
+{% if script %}
+<div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:.5rem; flex-wrap:wrap;">
+        <h2 style="margin:0;">Script ALTER completo ({{ selected_count }} cambio{{ selected_count|pluralize:"s" }})</h2>
+        <div>
+            <button type="button" class="btn secondary" id="copy-script" onclick="copyScript(this)">📋 Copiar</button>
+            <a class="btn" href="{% url 'download_script' run.pk %}">⬇ Descargar .sql</a>
+        </div>
+    </div>
+    <p class="muted">Aplica este script sobre <strong>{{ db1 }}</strong> para igualar su estructura a <strong>{{ db2 }}</strong>. Los DROP van comentados.</p>
+    <pre id="script-content">{{ script }}</pre>
+</div>
+{% endif %}
+
+<script>
+const SQL_MAP = JSON.parse(document.getElementById('sql-map').textContent);
+
+function selectRow(tr) {
+    document.querySelectorAll('#grid tbody tr').forEach(r => r.classList.remove('selected'));
+    tr.classList.add('selected');
+    const id = tr.dataset.id;
+    document.getElementById('detail-name').textContent = '— ' + tr.children[1].textContent.trim();
+    document.getElementById('detail-sql').textContent = SQL_MAP[id] || '(sin SQL)';
+}
+
+function toggleAll(state) {
+    document.querySelectorAll('#grid tbody tr').forEach(function (tr) {
+        if (tr.style.display !== 'none') {
+            tr.querySelector('input[name="changes"]').checked = state;
+        }
+    });
+    document.getElementById('check-header').checked = state;
+}
+
+function applyFilters() {
+    const name = document.getElementById('f-name').value.toLowerCase();
+    const type = document.getElementById('f-type').value;
+    const status = document.getElementById('f-status').value;
+    let visible = 0;
+    document.querySelectorAll('#grid tbody tr').forEach(function (tr) {
+        const ok = (!name || tr.dataset.name.includes(name))
+                && (!type || tr.dataset.type === type)
+                && (!status || tr.dataset.status === status);
+        tr.style.display = ok ? '' : 'none';
+        if (ok) visible++;
+    });
+    document.getElementById('visible-count').textContent = visible + ' objeto(s)';
+}
+['f-name', 'f-type', 'f-status'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', applyFilters);
+});
+applyFilters();
+
+function copyScript(btn) {
+    var text = document.getElementById('script-content').innerText;
+    var done = function () {
+        var original = btn.textContent;
+        btn.textContent = '✅ Copiado';
+        setTimeout(function () { btn.textContent = original; }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
+    } else {
+        fallbackCopy(text, done);
+    }
+}
+function fallbackCopy(text, done) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { alert('No se pudo copiar.'); }
+    document.body.removeChild(ta);
+}
+</script>
+
+{% endif %}
+{% endblock %}

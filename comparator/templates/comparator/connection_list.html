@@ -1,0 +1,37 @@
+{% extends "comparator/base.html" %}
+{% block title %}Conexiones{% endblock %}
+{% block content %}
+<div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h1>Conexiones registradas</h1>
+        <a class="btn" href="{% url 'connection_create' %}">+ Nueva conexión</a>
+    </div>
+    <p class="muted">Guarda tantas bases de datos como necesites y luego selecciónalas para comparar.</p>
+    {% if connections %}
+    <table>
+        <thead>
+            <tr><th>Nombre</th><th>Host</th><th>Puerto</th><th>Base</th><th>Usuario</th><th>Esquema</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for c in connections %}
+            <tr>
+                <td><strong>{{ c.name }}</strong></td>
+                <td>{{ c.host }}</td>
+                <td>{{ c.port }}</td>
+                <td>{{ c.dbname }}</td>
+                <td>{{ c.user }}</td>
+                <td>{{ c.schema }}</td>
+                <td style="white-space:nowrap;">
+                    <a class="btn secondary" href="{% url 'connection_test' c.pk %}">Probar</a>
+                    <a class="btn secondary" href="{% url 'connection_edit' c.pk %}">Editar</a>
+                    <a class="btn danger" href="{% url 'connection_delete' c.pk %}">Eliminar</a>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>No hay conexiones aún. <a href="{% url 'connection_create' %}">Crea la primera</a>.</p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends "comparator/base.html" %}
+{% block title %}Eliminar proyecto{% endblock %}
+{% block content %}
+<div class="card" style="max-width:600px;">
+    <h1>Eliminar proyecto</h1>
+    <p>¿Seguro que deseas eliminar el proyecto <strong>{{ project.name }}</strong>?
+       Las comparaciones ya guardadas se conservan en el historial.</p>
+    <form method="post">
+        {% csrf_token %}
+        <button class="btn danger" type="submit">Sí, eliminar</button>
+        <a class="btn secondary" href="{% url 'project_list' %}">Cancelar</a>
+    </form>
+</div>
+{% endblock %}
