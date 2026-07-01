@@ -1,35 +1,72 @@
 {% extends "comparator/base.html" %}
 {% block title %}Proyectos de comparación{% endblock %}
 {% block content %}
-<div class="card">
-    <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h1>Proyectos de comparación</h1>
-        <a class="btn" href="{% url 'project_create' %}">+ Nuevo proyecto</a>
+
+<div class="hero">
+    <h1>🗄️ Comparador de Bases de Datos PostgreSQL</h1>
+    <p>Compara estructura (columnas, índices y constraints) entre dos bases y genera el script <strong>ALTER</strong> para igualarlas.</p>
+    <div class="stats">
+        <div class="stat"><div class="n">{{ project_count }}</div><div class="l">Proyectos</div></div>
+        <div class="stat"><div class="n">{{ conn_count }}</div><div class="l">Conexiones</div></div>
+        <div class="stat"><div class="n">{{ run_count }}</div><div class="l">Comparaciones</div></div>
     </div>
-    <p class="muted">Configura el par de bases una sola vez y luego solo pulsa <strong>Comparar ahora</strong> cada vez que quieras una comparación nueva.</p>
-    {% if projects %}
-    <table>
-        <thead>
-            <tr><th>Proyecto</th><th>BD1 (destino)</th><th>BD2 (referencia)</th><th>Comparaciones</th><th></th></tr>
-        </thead>
-        <tbody>
-        {% for p in projects %}
-            <tr>
-                <td><a href="{% url 'comparison_list' %}?project={{ p.pk }}"><strong>{{ p.name }}</strong></a></td>
-                <td>{{ p.db1.name }}</td>
-                <td>{{ p.db2.name }}</td>
-                <td><a href="{% url 'comparison_list' %}?project={{ p.pk }}">{{ p.runs.count }}</a></td>
-                <td style="white-space:nowrap;">
-                    <a class="btn" href="{% url 'project_compare' p.pk %}">▶ Comparar ahora</a>
-                    <a class="btn secondary" href="{% url 'comparison_list' %}?project={{ p.pk }}">Historial</a>
-                    <a class="btn danger" href="{% url 'project_delete' p.pk %}">Eliminar</a>
-                </td>
-            </tr>
-        {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <p>No hay proyectos aún. <a href="{% url 'project_create' %}">Crea el primero</a> o haz una <a href="{% url 'compare' %}">comparación ad hoc</a>.</p>
-    {% endif %}
 </div>
+
+<div class="toolbar">
+    <h2 style="margin:0;">Proyectos de comparación</h2>
+    <span class="muted">Configura el par de bases una vez y compara cuando quieras.</span>
+    <span class="spacer"></span>
+    <a class="btn secondary" href="{% url 'compare' %}">Comparación ad hoc</a>
+    <a class="btn" href="{% url 'project_create' %}">+ Nuevo proyecto</a>
+</div>
+
+{% if project_cards %}
+<div class="card-grid">
+    {% for c in project_cards %}
+    <div class="pcard">
+        <h3>{{ c.obj.name }}</h3>
+        <div class="flow">
+            <span class="chip dst">{{ c.obj.db1.name }}</span>
+            <span class="arrow">→</span>
+            <span class="chip">{{ c.obj.db2.name }}</span>
+        </div>
+        <div class="meta">
+            {{ c.run_count }} comparación{{ c.run_count|pluralize:"es" }}
+            {% if c.last_run %}· última: {{ c.last_run.created_at|date:"Y-m-d H:i" }}{% endif %}
+        </div>
+        <div class="actions">
+            <a class="btn sm" href="{% url 'project_compare' c.obj.pk %}">▶ Comparar</a>
+            <a class="btn secondary sm" href="{% url 'comparison_list' %}?project={{ c.obj.pk }}">Historial</a>
+            <a class="btn secondary sm" href="{% url 'project_edit' c.obj.pk %}">✎ Editar</a>
+            <a class="btn danger sm" href="{% url 'project_delete' c.obj.pk %}">Eliminar</a>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card">
+    <h3 style="margin-top:0;">Empieza en 3 pasos</h3>
+    <div class="steps">
+        <div class="step">
+            <div class="num">1</div>
+            <strong>Registra tus conexiones</strong>
+            <p class="muted">Agrega las bases PostgreSQL (host, puerto, usuario…).</p>
+            <a class="btn secondary sm" href="{% url 'connection_create' %}">+ Conexión</a>
+        </div>
+        <div class="step">
+            <div class="num">2</div>
+            <strong>Crea un proyecto</strong>
+            <p class="muted">Elige BD1 (destino) y BD2 (referencia) una sola vez.</p>
+            <a class="btn secondary sm" href="{% url 'project_create' %}">+ Proyecto</a>
+        </div>
+        <div class="step">
+            <div class="num">3</div>
+            <strong>Compara</strong>
+            <p class="muted">Pulsa "Comparar" y genera tu script ALTER.</p>
+        </div>
+    </div>
+    <p class="muted" style="margin-top:1rem;">¿Solo una comparación rápida? Usa la <a href="{% url 'compare' %}">comparación ad hoc</a>.</p>
+</div>
+{% endif %}
+
 {% endblock %}

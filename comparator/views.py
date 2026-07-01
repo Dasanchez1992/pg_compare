@@ -153,6 +153,7 @@ def generate_script(request, pk):
         "selected_ids": selected_ids,
         "script": script,
         "selected_count": len(selected_ids),
+        "just_generated": True,
     })
     return render(request, "comparator/compare_result.html", context)
 
@@ -196,7 +197,21 @@ def comparison_rerun(request, pk):
 
 def project_list(request):
     projects = ComparisonProject.objects.select_related("db1", "db2").all()
-    return render(request, "comparator/project_list.html", {"projects": projects})
+    project_cards = []
+    for p in projects:
+        runs = p.runs.all()
+        project_cards.append({
+            "obj": p,
+            "run_count": runs.count(),
+            "last_run": runs.first(),  # ordenados por -created_at
+        })
+    context = {
+        "project_cards": project_cards,
+        "conn_count": DatabaseConnection.objects.count(),
+        "project_count": len(project_cards),
+        "run_count": ComparisonRun.objects.count(),
+    }
+    return render(request, "comparator/project_list.html", context)
 
 
 def project_create(request):
@@ -206,6 +221,16 @@ def project_create(request):
         messages.success(request, "Proyecto de comparación guardado.")
         return redirect("project_list")
     return render(request, "comparator/project_form.html", {"form": form, "titulo": "Nuevo proyecto"})
+
+
+def project_edit(request, pk):
+    project = get_object_or_404(ComparisonProject, pk=pk)
+    form = ComparisonProjectForm(request.POST or None, instance=project)
+    if request.method == "POST" and form.is_valid():
+        form.save()
+        messages.success(request, "Proyecto actualizado.")
+        return redirect("project_list")
+    return render(request, "comparator/project_form.html", {"form": form, "titulo": "Editar proyecto"})
 
 
 def project_delete(request, pk):

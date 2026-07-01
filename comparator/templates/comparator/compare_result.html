@@ -31,6 +31,7 @@
             <button type="button" class="btn secondary" onclick="toggleAll(true)">Marcar todo</button>
             <button type="button" class="btn secondary" onclick="toggleAll(false)">Desmarcar todo</button>
             <button class="btn" type="submit">⚙ Generar script</button>
+            {% if script %}<button type="button" class="btn secondary" onclick="openModal()">👁 Ver script</button>{% endif %}
         </div>
 
         <div class="grid-wrap">
@@ -89,32 +90,48 @@
 <!-- Panel inferior: SQL del objeto seleccionado -->
 <div class="card">
     <h3 style="margin-top:0;">SQL de la diferencia <span class="muted" id="detail-name"></span></h3>
-    <pre id="detail-sql">Selecciona una fila de la grilla para ver su SQL.</pre>
+    <pre><code id="detail-sql" class="language-sql">Selecciona una fila de la grilla para ver su SQL.</code></pre>
 </div>
 
 {% if script %}
-<div class="card">
-    <div style="display:flex; justify-content:space-between; align-items:center; gap:.5rem; flex-wrap:wrap;">
-        <h2 style="margin:0;">Script ALTER completo ({{ selected_count }} cambio{{ selected_count|pluralize:"s" }})</h2>
-        <div>
+<div class="modal-overlay" id="script-modal">
+    <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-header">
+            <h2>Script ALTER completo ({{ selected_count }} cambio{{ selected_count|pluralize:"s" }})</h2>
+            <span class="spacer"></span>
+            <button type="button" class="modal-close" onclick="closeModal()" aria-label="Cerrar">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="muted" style="margin-top:0;">Aplica este script sobre <strong>{{ db1 }}</strong> para igualar su estructura a <strong>{{ db2 }}</strong>. Los DROP van comentados.</p>
+            <pre><code id="script-content" class="language-sql">{{ script }}</code></pre>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn secondary" onclick="closeModal()">Cerrar</button>
             <button type="button" class="btn secondary" id="copy-script" onclick="copyScript(this)">📋 Copiar</button>
             <a class="btn" href="{% url 'download_script' run.pk %}">⬇ Descargar .sql</a>
         </div>
     </div>
-    <p class="muted">Aplica este script sobre <strong>{{ db1 }}</strong> para igualar su estructura a <strong>{{ db2 }}</strong>. Los DROP van comentados.</p>
-    <pre id="script-content">{{ script }}</pre>
 </div>
 {% endif %}
 
 <script>
 const SQL_MAP = JSON.parse(document.getElementById('sql-map').textContent);
 
+function highlight(el) {
+    if (window.hljs && el) {
+        el.removeAttribute('data-highlighted');
+        el.className = 'language-sql';
+        hljs.highlightElement(el);
+    }
+}
 function selectRow(tr) {
     document.querySelectorAll('#grid tbody tr').forEach(r => r.classList.remove('selected'));
     tr.classList.add('selected');
     const id = tr.dataset.id;
     document.getElementById('detail-name').textContent = '— ' + tr.children[1].textContent.trim();
-    document.getElementById('detail-sql').textContent = SQL_MAP[id] || '(sin SQL)';
+    const el = document.getElementById('detail-sql');
+    el.textContent = SQL_MAP[id] || '(sin SQL)';
+    highlight(el);
 }
 
 function toggleAll(state) {
@@ -144,6 +161,20 @@ function applyFilters() {
     document.getElementById(id).addEventListener('input', applyFilters);
 });
 applyFilters();
+
+function openModal() {
+    var m = document.getElementById('script-modal');
+    if (m) m.classList.add('open');
+}
+function closeModal() {
+    var m = document.getElementById('script-modal');
+    if (m) m.classList.remove('open');
+}
+// Resaltar el script generado al cargar.
+highlight(document.getElementById('script-content'));
+
+// Abrir automáticamente solo cuando se acaba de generar el script.
+{% if just_generated %}openModal();{% endif %}
 
 function copyScript(btn) {
     var text = document.getElementById('script-content').innerText;

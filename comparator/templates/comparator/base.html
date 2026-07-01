@@ -4,6 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Comparador de BD{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
     <style>
         :root { --bg:#0f172a; --card:#1e293b; --border:#334155; --text:#e2e8f0;
                 --accent:#38bdf8; --green:#22c55e; --red:#ef4444; --amber:#f59e0b; }
@@ -33,7 +36,9 @@
         .msg.success { background:rgba(34,197,94,.15); border:1px solid var(--green); }
         .msg.error   { background:rgba(239,68,68,.15); border:1px solid var(--red); }
         pre { background:#020617; color:#e2e8f0; padding:1rem; border-radius:8px;
-              overflow:auto; border:1px solid var(--border); max-height:500px; }
+              overflow:auto; border:1px solid var(--border); max-height:500px; margin:0; }
+        pre code.hljs { padding:0; background:transparent; font-family:
+              ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.85rem; }
         .badge { padding:.1rem .5rem; border-radius:999px; font-size:.75rem; font-weight:700; }
         .b-add { background:rgba(34,197,94,.2); color:var(--green); }
         .b-del { background:rgba(239,68,68,.2); color:var(--red); }
@@ -73,6 +78,52 @@
         .toolbar { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-bottom:.6rem; }
         .toolbar .spacer { flex:1; }
         .st-count { display:inline-block; min-width:1.5rem; }
+        /* Modal */
+        .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.6);
+                         z-index:1000; align-items:center; justify-content:center; padding:1rem; }
+        .modal-overlay.open { display:flex; }
+        .modal { background:var(--card); border:1px solid var(--border); border-radius:12px;
+                 width:min(900px, 96vw); max-height:90vh; display:flex; flex-direction:column;
+                 box-shadow:0 10px 40px rgba(0,0,0,.5); }
+        .modal-header, .modal-footer { padding:1rem 1.25rem; display:flex; align-items:center;
+                                       gap:.5rem; flex-wrap:wrap; }
+        .modal-header { border-bottom:1px solid var(--border); }
+        .modal-footer { border-top:1px solid var(--border); justify-content:flex-end; }
+        .modal-header h2 { margin:0; font-size:1.1rem; }
+        .modal-body { padding:1rem 1.25rem; overflow:auto; }
+        .modal-body pre { margin:0; max-height:none; }
+        .modal-close { background:none; border:none; color:var(--text); font-size:1.5rem;
+                       cursor:pointer; line-height:1; }
+        /* Hero + tarjetas de proyecto */
+        .hero { background:linear-gradient(135deg, #1e293b, #0b1220); border:1px solid var(--border);
+                border-radius:14px; padding:1.75rem 2rem; margin-bottom:1.5rem; }
+        .hero h1 { margin:0 0 .35rem; font-size:1.6rem; }
+        .hero p { margin:0; color:#94a3b8; }
+        .stats { display:flex; gap:1rem; flex-wrap:wrap; margin-top:1.25rem; }
+        .stat { background:rgba(255,255,255,.04); border:1px solid var(--border); border-radius:10px;
+                padding:.75rem 1.1rem; min-width:110px; }
+        .stat .n { font-size:1.6rem; font-weight:800; color:var(--accent); }
+        .stat .l { font-size:.8rem; color:#94a3b8; }
+        .card-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:1rem; }
+        .pcard { background:var(--card); border:1px solid var(--border); border-radius:12px;
+                 padding:1.25rem; display:flex; flex-direction:column; gap:.75rem;
+                 transition:border-color .15s, transform .15s; }
+        .pcard:hover { border-color:var(--accent); transform:translateY(-2px); }
+        .pcard h3 { margin:0; font-size:1.15rem; }
+        .flow { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; }
+        .chip { background:rgba(56,189,248,.12); border:1px solid var(--border); border-radius:999px;
+                padding:.2rem .7rem; font-size:.85rem; }
+        .chip.dst { border-color:var(--amber); }
+        .arrow { color:var(--accent); font-weight:700; }
+        .pcard .meta { color:#94a3b8; font-size:.85rem; }
+        .pcard .actions { display:flex; gap:.4rem; flex-wrap:wrap; margin-top:auto; }
+        .btn.sm { padding:.35rem .7rem; font-size:.85rem; }
+        .steps { display:flex; gap:1rem; flex-wrap:wrap; margin-top:1rem; }
+        .step { flex:1; min-width:220px; background:var(--card); border:1px solid var(--border);
+                border-radius:10px; padding:1rem; }
+        .step .num { display:inline-flex; width:1.8rem; height:1.8rem; border-radius:50%;
+                     background:var(--accent); color:#0f172a; font-weight:800;
+                     align-items:center; justify-content:center; margin-bottom:.5rem; }
     </style>
 </head>
 <body>
