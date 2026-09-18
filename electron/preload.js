@@ -47,6 +47,16 @@ contextBridge.exposeInMainWorld('api', {
 
   confirm: (payload) => call('dialog:confirm', payload),
 
+  updates: {
+    check: () => call('updates:check'),
+    skip: (version) => call('updates:skip', version),
+    download: (url) => call('updates:download', url),
+    /** Aviso empujado desde el proceso principal al encontrar una versión. */
+    onAvailable: (callback) => {
+      ipcRenderer.on('update:available', (_event, update) => callback(update));
+    },
+  },
+
   /** Avisos de progreso mientras se lee el catálogo de las bases. */
   onProgress: (callback) => {
     const listener = (_event, message) => callback(message);

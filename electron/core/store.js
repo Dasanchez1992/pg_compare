@@ -23,10 +23,19 @@ const plainCipher = {
   decrypt: (blob) => (blob && blob.enc === 'plain' ? blob.value : ''),
 };
 
+function defaultSettings() {
+  return {
+    // Aviso de versiones nuevas: la única conexión que hace la app fuera de
+    // las bases de datos registradas.
+    updates: { enabled: true, skippedVersion: null, lastCheck: null },
+  };
+}
+
 function emptyData() {
   return {
     version: VERSION,
     nextId: { connection: 1, project: 1, run: 1 },
+    settings: defaultSettings(),
     connections: [],
     projects: [],
     runs: [],
@@ -87,6 +96,24 @@ class Store {
   /** Aviso si el archivo de datos estaba corrupto al arrancar. */
   get loadError() {
     return this.data.loadError || null;
+  }
+
+  // --- Ajustes --------------------------------------------------------
+
+  /** Ajustes guardados, completados con los valores por defecto. */
+  settings() {
+    const stored = this.data.settings || {};
+    const defaults = defaultSettings();
+    return { updates: { ...defaults.updates, ...(stored.updates || {}) } };
+  }
+
+  /** Cambia parte de los ajustes de una sección y devuelve el resultado. */
+  updateSettings(section, patch) {
+    const current = this.settings();
+    if (!current[section]) throw new Error(`Ajuste desconocido: ${section}`);
+    this.data.settings = { ...current, [section]: { ...current[section], ...patch } };
+    this.#save();
+    return this.settings();
   }
 
   // --- Conexiones ----------------------------------------------------

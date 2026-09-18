@@ -206,3 +206,36 @@ test('normalizeConnection valida los datos del formulario', () => {
   assert.equal(limpio.schema, 'public');
   assert.equal(limpio.ssl, false);
 });
+
+// --- Ajustes ---------------------------------------------------------------
+
+test('los ajustes tienen valores por defecto y se guardan', () => {
+  const { store, dir } = newStore();
+
+  assert.deepEqual(store.settings().updates,
+    { enabled: true, skippedVersion: null, lastCheck: null });
+
+  store.updateSettings('updates', { enabled: false, skippedVersion: '2.2.0' });
+
+  const reabierto = new Store(dir);
+  assert.equal(reabierto.settings().updates.enabled, false);
+  assert.equal(reabierto.settings().updates.skippedVersion, '2.2.0');
+  assert.equal(reabierto.settings().updates.lastCheck, null);   // lo no tocado se conserva
+});
+
+test('un ajuste desconocido no se guarda a lo loco', () => {
+  const { store } = newStore();
+  assert.throws(() => store.updateSettings('inventado', { x: 1 }), /Ajuste desconocido/);
+});
+
+test('un data.json viejo, sin ajustes, sigue funcionando', () => {
+  const { store, dir } = newStore();
+  store.saveConnection(conexion());
+  const crudo = JSON.parse(fs.readFileSync(path.join(dir, 'data.json'), 'utf8'));
+  delete crudo.settings;                       // como lo escribía la versión anterior
+  fs.writeFileSync(path.join(dir, 'data.json'), JSON.stringify(crudo), 'utf8');
+
+  const reabierto = new Store(dir);
+  assert.equal(reabierto.settings().updates.enabled, true);
+  assert.equal(reabierto.listConnections().length, 1);
+});

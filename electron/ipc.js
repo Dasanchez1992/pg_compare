@@ -12,10 +12,17 @@
 
 const fs = require('fs/promises');
 const path = require('path');
-const { app, dialog, ipcMain, shell } = require('electron');
+const { app, dialog, ipcMain, net, shell } = require('electron');
 
 const { compare, buildScript } = require('./core/diff');
 const { introspect, testConnection } = require('./core/introspect');
+const { checkForUpdate, repoFromPackage } = require('./core/updates');
+
+const REPO = repoFromPackage(require('../package.json'));
+
+// Cada cuánto se vuelve a mirar si hay versión nueva, con la app abierta.
+const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
+const FIRST_CHECK_DELAY_MS = 8000;
 
 /** Envuelve un handler para que nunca reviente el canal IPC. */
 function handler(fn, logger) {
@@ -27,6 +34,59 @@ function handler(fn, logger) {
       return { ok: false, error: error.message };
     }
   };
+}
+
+/**
+ * Descarga con la pila de red de Chromium, que respeta la configuración de
+ * proxy y los certificados del sistema (lo normal en una red corporativa).
+ * Si esa vía falla, se reintenta con el fetch de Node.
+ */
+async function appFetch(url, options) {
+  try {
+    return await net.fetch(url, options);
+  } catch {
+    return fetch(url, options);
+  }
+}
+
+/**
+ * Busca una versión nueva y avisa a la ventana.
+ *
+ * @param {boolean} manual  true si lo pidió el usuario desde el menú: entonces
+ *   se ignora la versión descartada y se responde también cuando está al día.
+ */
+async function runUpdateCheck({ store, logger, getWindow, manual = false }) {
+  const settings = store.settings().updates;
+  if (!manual && !settings.enabled) return null;
+
+  try {
+    const update = await checkForUpdate({
+      repo: REPO,
+      currentVersion: app.getVersion(),
+      fetchImpl: appFetch,
+    });
+    store.updateSettings('updates', { lastCheck: new Date().toISOString() });
+
+    if (!update) {
+      logger.info('No hay versiones nuevas.');
+      return { upToDate: true, version: app.getVersion() };
+    }
+    if (!manual && update.version === settings.skippedVersion) {
+      logger.info(`Versión ${update.version} disponible, pero el usuario la descartó.`);
+      return null;
+    }
+
+    logger.info(`Versión ${update.version} disponible.`);
+    const win = getWindow();
+    if (win && !win.isDestroyed()) win.webContents.send('update:available', update);
+    return update;
+  } catch (error) {
+    // Sin internet o GitHub caído: se registra y no se molesta al usuario,
+    // salvo que la comprobación la haya pedido él.
+    logger.error(`No se pudo comprobar si hay versiones nuevas: ${error.message}`);
+    if (manual) throw error;
+    return null;
+  }
 }
 
 function registerIpc({ store, cipher, logger, getWindow }) {
@@ -41,6 +101,8 @@ function registerIpc({ store, cipher, logger, getWindow }) {
 
   on('app:info', () => ({
     version: app.getVersion(),
+    updates: store.settings().updates,
+    repo: REPO,
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,
@@ -168,6 +230,16 @@ function registerIpc({ store, cipher, logger, getWindow }) {
   /** Abre la carpeta del archivo recién guardado. */
   on('shell:show-file', (filePath) => shell.showItemInFolder(filePath));
 
+  // --- Versiones nuevas -----------------------------------------------
+
+  on('updates:check', () => runUpdateCheck({ store, logger, getWindow, manual: true }));
+
+  /** "Ahora no": no volver a avisar de esta versión concreta. */
+  on('updates:skip', (version) => store.updateSettings('updates', { skippedVersion: version }));
+
+  /** Abre la página de la release o el archivo que toca en el navegador. */
+  on('updates:download', (url) => shell.openExternal(url));
+
   /** Confirmación nativa para las acciones destructivas. */
   on('dialog:confirm', async ({ title, message, detail, confirmLabel = 'Eliminar' }) => {
     const { response } = await dialog.showMessageBox(getWindow(), {
@@ -183,4 +255,6 @@ function registerIpc({ store, cipher, logger, getWindow }) {
   });
 }
 
-module.exports = { registerIpc };
+module.exports = {
+  registerIpc, runUpdateCheck, REPO, CHECK_EVERY_MS, FIRST_CHECK_DELAY_MS,
+};

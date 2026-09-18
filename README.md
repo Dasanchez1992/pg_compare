@@ -5,8 +5,9 @@ Aplicación de **escritorio** (Windows, macOS y Linux) que compara la
 necesario para igualar BD1 con BD2.
 
 Todo se ejecuta en la máquina de quien compara: no hay servidor, ni servicio
-web, ni nada que instalar aparte de la propia aplicación. Las únicas
-conexiones de red que abre son las que van a las bases de datos que registres.
+web, ni nada que instalar aparte de la propia aplicación. Se conecta a las
+bases de datos que registres y, si lo dejas activado, consulta GitHub para
+avisarte de versiones nuevas: nada más, y nada de tus datos sale del equipo.
 
 ## Qué compara
 
@@ -90,6 +91,25 @@ La interfaz corre aislada: sin acceso a Node ni al sistema de archivos, y
 solo puede pedir las operaciones declaradas en `electron/preload.js`. El
 acceso a PostgreSQL y al disco ocurre siempre en el proceso principal.
 
+## Aviso de versiones nuevas
+
+La aplicación mira si hay una versión más reciente publicada en el
+repositorio: al arrancar y cada seis horas mientras esté abierta. Cuando la
+hay, aparece un aviso arriba con el archivo que corresponde a tu sistema
+(el instalador en Windows, el AppImage en Linux, el dmg en macOS), un enlace
+a las novedades y un **Ahora no** que silencia esa versión concreta. Si la
+ventana no está a la vista, además sale una notificación del sistema.
+
+Descargar e instalar lo decides tú: la app no se actualiza sola ni sustituye
+archivos por su cuenta.
+
+Desde **Ayuda** puedes lanzar la comprobación a mano (*Buscar
+actualizaciones…*) o desactivarla del todo (*Avisarme de versiones nuevas*).
+Es la única conexión que hace la aplicación fuera de tus bases de datos: una
+consulta de lectura a la API pública de GitHub, sin enviar ningún dato tuyo.
+Usa la pila de red de Chromium, así que respeta el proxy y los certificados
+configurados en el sistema.
+
 ## Dónde se guardan los datos
 
 | Sistema | Carpeta |
@@ -98,7 +118,7 @@ acceso a PostgreSQL y al disco ocurre siempre en el proceso principal.
 | macOS | `~/Library/Application Support/pg-compare-desktop` |
 | Linux | `~/.config/pg-compare-desktop` |
 
-Contiene `data.json` (conexiones, proyectos e índice del historial),
+Contiene `data.json` (conexiones, proyectos, ajustes e índice del historial),
 `runs/<id>.json` (el resultado de cada comparación), `window-state.json` y
 `logs/app.log`. Se abre desde **Archivo → Abrir carpeta de datos**.
 Desinstalar la aplicación no borra esa carpeta.
