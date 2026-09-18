@@ -1,7 +1,13 @@
-# Comparador de Bases de Datos PostgreSQL (Django)
+# Comparador de Bases de Datos PostgreSQL
 
-App web en Django para comparar la **estructura** de dos bases de datos PostgreSQL
-y generar el **script `ALTER`** necesario para igualar BD1 con BD2.
+Compara la **estructura** de dos bases de datos PostgreSQL y genera el
+**script `ALTER`** necesario para igualar BD1 con BD2.
+
+Se puede usar de dos formas, con el mismo código y las mismas pantallas:
+
+- **App de escritorio** (Windows, macOS y Linux): Electron con el backend
+  Django embebido. Ver [`desktop/README.md`](desktop/README.md).
+- **App web**: el proyecto Django de siempre, con `python manage.py runserver`.
 
 ## Qué compara
 
@@ -31,8 +37,26 @@ sobre el esquema correcto aunque no sea `public`.
 
 ## Instalación
 
+### Como app de escritorio
+
 ```bash
-cd db_comparator
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements-desktop.txt
+
+cd desktop
+npm install
+npm start                          # abre la ventana de la aplicación
+```
+
+Para generar los instaladores (`.dmg`, `.exe`, `.AppImage`, `.deb`):
+`cd desktop && npm run dist`. Los detalles, la carpeta donde se guardan los
+datos del usuario y la resolución de problemas están en
+[`desktop/README.md`](desktop/README.md).
+
+### Como app web
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -71,6 +95,15 @@ mismas bases para obtener un resultado fresco, o eliminarla.
 
 - La BD interna de la app usa SQLite por defecto (`db.sqlite3`). Puedes
   cambiarla a PostgreSQL en `dbcompare/settings.py` → `DATABASES`.
+  En la app de escritorio ese archivo vive en la carpeta de datos del usuario,
+  no junto al código.
+- Las dependencias de la app de escritorio (`waitress`, `whitenoise` y
+  `pyinstaller`) están en `requirements-desktop.txt`; el modo web solo necesita
+  `requirements.txt`.
+- `highlight.js` se sirve desde `comparator/static/` en vez de un CDN, para que
+  la app funcione sin conexión. Si despliegas la versión web con `DEBUG=False`,
+  ejecuta `python manage.py collectstatic` (con `whitenoise` instalado se
+  sirven solos).
 - Las contraseñas de las conexiones se guardan en texto plano en la BD interna.
   Para producción, considera cifrarlas o usar variables de entorno / un
   gestor de secretos.
@@ -79,5 +112,7 @@ mismas bases para obtener un resultado fresco, o eliminarla.
 - La comparación de índices/constraints usa el texto de `pg_get_indexdef` /
   `pg_get_constraintdef`: si las dos bases corren versiones muy distintas de
   PostgreSQL pueden aparecer falsos positivos por diferencias de formato.
-- La app no tiene autenticación propia: pensada para uso local o en red
-  interna de confianza.
+- La versión web no tiene autenticación propia: pensada para uso local o en
+  red interna de confianza. La app de escritorio sí protege su backend: escucha
+  solo en loopback, en un puerto aleatorio, y exige un token que genera Electron
+  en cada arranque.

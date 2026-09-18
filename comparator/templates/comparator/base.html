@@ -1,12 +1,14 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Comparador de BD{% endblock %}</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/sql.min.js"></script>
+    <!-- highlight.js servido localmente: la app de escritorio funciona sin internet. -->
+    <link rel="stylesheet" href="{% static 'comparator/vendor/highlight/github-dark.min.css' %}">
+    <script src="{% static 'comparator/vendor/highlight/highlight.min.js' %}"></script>
+    <script src="{% static 'comparator/vendor/highlight/sql.min.js' %}"></script>
     <style>
         :root {
             --bg:#0b1120; --card:#151f31; --card2:#0e1626; --border:#2a3a52;
