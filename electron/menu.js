@@ -4,18 +4,25 @@ const { Menu, app, dialog, shell } = require('electron');
 
 const isMac = process.platform === 'darwin';
 
+const AUTHOR = {
+  name: 'Danilo Sánchez',
+  url: 'https://www.linkedin.com/in/danilo-s%C3%A1nchez-34a391126/',
+};
+
 /** Pide a la interfaz que cambie de vista (las rutas son hashes). */
 function navigate(win, route) {
   if (win && !win.isDestroyed()) win.webContents.send('navigate', route);
 }
 
-function aboutDialog(win) {
-  dialog.showMessageBox(win, {
+async function aboutDialog(win) {
+  const { response } = await dialog.showMessageBox(win, {
     type: 'info',
     title: 'Acerca de Comparador de BD',
     message: 'Comparador de Bases de Datos PostgreSQL',
     detail: [
       `Versión: ${app.getVersion()}`,
+      `Autor: ${AUTHOR.name}`,
+      '',
       `Electron: ${process.versions.electron}`,
       `Chromium: ${process.versions.chrome}`,
       `Node: ${process.versions.node}`,
@@ -25,8 +32,11 @@ function aboutDialog(win) {
       '',
       `Datos: ${app.getPath('userData')}`,
     ].join('\n'),
-    buttons: ['Cerrar'],
+    buttons: ['Cerrar', 'Perfil del autor'],
+    defaultId: 0,
+    cancelId: 0,
   });
+  if (response === 1) shell.openExternal(AUTHOR.url);
 }
 
 /**

@@ -228,3 +228,92 @@ test('createTableSql ordena las columnas por posición y los constraints por tip
     ');',
   ].join('\n'));
 });
+
+// --- Comentarios de las columnas (COMMENT ON COLUMN) ----------------------
+
+test('detecta un comentario nuevo, uno cambiado y uno quitado', () => {
+  const source = new Schema('public');
+  source.addColumn('t', 'nuevo', { ...col(1, 'text'), comment: 'documentada' });
+  source.addColumn('t', 'cambiado', { ...col(2, 'text'), comment: 'texto nuevo' });
+  source.addColumn('t', 'quitado', col(3, 'text'));
+
+  const target = new Schema('public');
+  target.addColumn('t', 'nuevo', col(1, 'text'));
+  target.addColumn('t', 'cambiado', { ...col(2, 'text'), comment: 'texto viejo' });
+  target.addColumn('t', 'quitado', { ...col(3, 'text'), comment: 'sobra' });
+
+  const result = compare({ source, target });
+
+  assert.deepEqual(Object.keys(result.sqlById), [
+    'col_comment:t:cambiado', 'col_comment:t:nuevo', 'col_comment:t:quitado',
+  ]);
+  assert.equal(result.sqlById['col_comment:t:nuevo'],
+    'COMMENT ON COLUMN "t"."nuevo" IS \'documentada\';');
+  assert.equal(result.sqlById['col_comment:t:cambiado'],
+    'COMMENT ON COLUMN "t"."cambiado" IS \'texto nuevo\';');
+  // Quitar un comentario en PostgreSQL es asignarle NULL.
+  assert.equal(result.sqlById['col_comment:t:quitado'],
+    'COMMENT ON COLUMN "t"."quitado" IS NULL;');
+});
+
+test('un comentario igual no genera diferencia', () => {
+  const source = new Schema('public');
+  source.addColumn('t', 'c', { ...col(1, 'text'), comment: 'misma' });
+  const target = new Schema('public');
+  target.addColumn('t', 'c', { ...col(1, 'text'), comment: 'misma' });
+
+  assert.equal(compare({ source, target }).totalChanges, 0);
+});
+
+test('las comillas dentro de un comentario se escapan', () => {
+  const source = new Schema('public');
+  source.addColumn('t', 'c', { ...col(1, 'text'), comment: "el 'código' del cliente" });
+  const target = new Schema('public');
+  target.addColumn('t', 'c', col(1, 'text'));
+
+  assert.equal(compare({ source, target }).sqlById['col_comment:t:c'],
+    'COMMENT ON COLUMN "t"."c" IS \'el \'\'código\'\' del cliente\';');
+});
+
+test('una columna nueva se crea con su comentario en la misma sentencia', () => {
+  const source = new Schema('public');
+  source.addColumn('t', 'vieja', col(1, 'text'));
+  source.addColumn('t', 'nueva', { ...col(2, 'text'), comment: 'recién documentada' });
+  const target = new Schema('public');
+  target.addColumn('t', 'vieja', col(1, 'text'));
+
+  assert.equal(compare({ source, target }).sqlById['col_add:t:nueva'], [
+    'ALTER TABLE "t" ADD COLUMN "nueva" text;',
+    'COMMENT ON COLUMN "t"."nueva" IS \'recién documentada\';',
+  ].join('\n'));
+});
+
+test('una tabla nueva arrastra los comentarios de sus columnas', () => {
+  const source = new Schema('public');
+  source.addColumn('nueva', 'id', { ...col(1, 'integer', true), comment: 'clave' });
+  source.addColumn('nueva', 'sin_doc', col(2, 'text'));
+  source.addColumn('nueva', 'dato', { ...col(3, 'text'), comment: 'el dato' });
+  const target = new Schema('public');
+
+  assert.equal(compare({ source, target }).sqlById['tbl_add:nueva'], [
+    'CREATE TABLE "nueva" (',
+    '\t"id" integer NOT NULL,',
+    '\t"sin_doc" text,',
+    '\t"dato" text',
+    ');',
+    'COMMENT ON COLUMN "nueva"."id" IS \'clave\';',
+    'COMMENT ON COLUMN "nueva"."dato" IS \'el dato\';',
+  ].join('\n'));
+});
+
+test('el comentario se compara junto al resto de atributos de la columna', () => {
+  const source = new Schema('public');
+  source.addColumn('t', 'c', { ...col(1, 'text', true), comment: 'nueva doc' });
+  const target = new Schema('public');
+  target.addColumn('t', 'c', col(1, 'integer'));
+
+  // Orden dentro del grupo: tipo, NOT NULL, default y por último el comentario.
+  assert.deepEqual(Object.keys(compare({ source, target }).sqlById), [
+    'col_type:t:c', 'col_null:t:c', 'col_comment:t:c',
+  ]);
+});
