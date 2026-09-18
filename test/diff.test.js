@@ -317,3 +317,110 @@ test('el comentario se compara junto al resto de atributos de la columna', () =>
     'col_type:t:c', 'col_null:t:c', 'col_comment:t:c',
   ]);
 });
+
+// --- Orden por dependencias entre tablas nuevas ----------------------------
+
+/** Tabla nueva con su PK y, opcionalmente, claves foráneas a otras tablas. */
+function tablaNueva(schema, nombre, referencias = []) {
+  schema.addColumn(nombre, 'id', col(1, 'integer', true));
+  schema.addConstraint(nombre, `${nombre}_pkey`, 'PRIMARY KEY', 'PRIMARY KEY (id)');
+  referencias.forEach((destino, i) => {
+    schema.addColumn(nombre, `${destino}_id`, col(i + 2, 'integer'));
+    schema.addConstraint(
+      nombre, `fk_${nombre}_${destino}`, 'FOREIGN KEY',
+      `FOREIGN KEY (${destino}_id) REFERENCES ${destino}(id)`,
+      { schema: schema.schemaName, table: destino },
+    );
+  });
+}
+
+/** Orden en que el script crea las tablas nuevas. */
+function ordenDeCreacion(source, target = new Schema(source.schemaName)) {
+  return Object.keys(compare({ source, target }).sqlById)
+    .filter((id) => id.startsWith('tbl_add:'))
+    .map((id) => id.slice('tbl_add:'.length));
+}
+
+test('la tabla referenciada se crea antes que la que la referencia', () => {
+  const source = new Schema('ventas');
+  tablaNueva(source, 'a_hijo', ['z_padre']);   // alfabéticamente iría primero
+  tablaNueva(source, 'z_padre');
+
+  assert.deepEqual(ordenDeCreacion(source), ['z_padre', 'a_hijo']);
+});
+
+test('ordena cadenas de dependencias de varios niveles', () => {
+  const source = new Schema('ventas');
+  tablaNueva(source, 'a_factura', ['m_pedido']);
+  tablaNueva(source, 'm_pedido', ['z_cliente']);
+  tablaNueva(source, 'z_cliente');
+
+  assert.deepEqual(ordenDeCreacion(source), ['z_cliente', 'm_pedido', 'a_factura']);
+});
+
+test('las tablas independientes conservan el orden alfabético', () => {
+  const source = new Schema('ventas');
+  tablaNueva(source, 'c_uno');
+  tablaNueva(source, 'a_dos');
+  tablaNueva(source, 'b_tres');
+
+  assert.deepEqual(ordenDeCreacion(source), ['a_dos', 'b_tres', 'c_uno']);
+});
+
+test('una autorreferencia no es un ciclo: se queda dentro del CREATE TABLE', () => {
+  const source = new Schema('ventas');
+  source.addColumn('empleados', 'id', col(1, 'integer', true));
+  source.addColumn('empleados', 'jefe_id', col(2, 'integer'));
+  source.addConstraint('empleados', 'empleados_pkey', 'PRIMARY KEY', 'PRIMARY KEY (id)');
+  source.addConstraint('empleados', 'fk_jefe', 'FOREIGN KEY',
+    'FOREIGN KEY (jefe_id) REFERENCES empleados(id)', { schema: 'ventas', table: 'empleados' });
+
+  const result = compare({ source, target: new Schema('ventas') });
+  assert.match(result.sqlById['tbl_add:empleados'], /CONSTRAINT "fk_jefe" FOREIGN KEY/);
+  assert.ok(!Object.keys(result.sqlById).some((id) => id.startsWith('con_add:')));
+});
+
+test('dos tablas que se referencian entre sí: se crean y las FK van después', () => {
+  const source = new Schema('ventas');
+  tablaNueva(source, 'a_uno', ['b_dos']);
+  tablaNueva(source, 'b_dos', ['a_uno']);
+
+  const result = compare({ source, target: new Schema('ventas') });
+  const ids = Object.keys(result.sqlById);
+
+  // Las dos tablas se crean antes que cualquier ALTER que añada una FK.
+  const ultimoCreate = Math.max(ids.indexOf('tbl_add:a_uno'), ids.indexOf('tbl_add:b_dos'));
+  const primerFk = ids.findIndex((id) => id.startsWith('con_add:'));
+  assert.ok(primerFk > ultimoCreate, 'las claves foráneas deben ir tras los CREATE TABLE');
+
+  // Al menos una de las dos sale del CREATE para romper el ciclo.
+  const fks = ids.filter((id) => id.startsWith('con_add:'));
+  assert.equal(fks.length, 1);
+  assert.match(result.sqlById[fks[0]], /ALTER TABLE .* ADD CONSTRAINT .* FOREIGN KEY/);
+  // Y esa ya no aparece dentro de su CREATE TABLE.
+  const [, tabla, nombre] = fks[0].split(':');
+  assert.ok(!result.sqlById[`tbl_add:${tabla}`].includes(nombre));
+});
+
+test('una clave foránea a una tabla que ya existe no altera el orden', () => {
+  const source = new Schema('ventas');
+  tablaNueva(source, 'a_nueva', ['z_existente']);
+  tablaNueva(source, 'z_existente');
+  const target = new Schema('ventas');
+  tablaNueva(target, 'z_existente');            // esta ya está en el destino
+
+  assert.deepEqual(ordenDeCreacion(source, target), ['a_nueva']);
+  const result = compare({ source, target });
+  assert.match(result.sqlById['tbl_add:a_nueva'], /CONSTRAINT "fk_a_nueva_z_existente"/);
+});
+
+test('una clave foránea a otro esquema no cuenta como dependencia', () => {
+  const source = new Schema('ventas');
+  tablaNueva(source, 'a_hijo');
+  source.addConstraint('a_hijo', 'fk_externa', 'FOREIGN KEY',
+    'FOREIGN KEY (id) REFERENCES publico.otra(id)', { schema: 'publico', table: 'z_padre' });
+  tablaNueva(source, 'z_padre');
+
+  // Apunta a "z_padre" pero de otro esquema: no debe reordenar nada.
+  assert.deepEqual(ordenDeCreacion(source), ['a_hijo', 'z_padre']);
+});
