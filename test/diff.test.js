@@ -556,3 +556,100 @@ test('las secuencias se crean antes que las tablas, y las vistas al final', () =
   assert.deepEqual(Object.keys(compare({ source, target: new Schema('ventas') }).sqlById),
     ['seq_add:s', 'tbl_add:t', 'view_add:v']);
 });
+
+// --- Funciones y procedimientos --------------------------------------------
+
+const FUNCION = 'CREATE OR REPLACE FUNCTION ventas.saludo(quien text)\n'
+  + ' RETURNS text\n LANGUAGE sql\nAS $function$ SELECT \'hola \' || quien $function$';
+
+test('una función nueva se crea con la definición del catálogo', () => {
+  const source = new Schema('ventas');
+  source.addFunction('saludo', 'quien text', { kind: 'FUNCTION', definition: FUNCION });
+
+  const result = compare({ source, target: new Schema('ventas'), db2Name: 'prod' });
+  assert.equal(result.sqlById['fn_add:saludo(quien text)'], `${FUNCION};`);
+  const fila = result.rows[0];
+  assert.equal(fila.type, 'Función');
+  assert.equal(fila.name, 'saludo(quien text)');
+  assert.equal(fila.detail, 'función · solo existe en prod');
+});
+
+test('las sobrecargas se tratan como funciones distintas', () => {
+  const source = new Schema('ventas');
+  source.addFunction('saludo', 'quien text', { kind: 'FUNCTION', definition: 'A' });
+  source.addFunction('saludo', 'quien integer', { kind: 'FUNCTION', definition: 'B' });
+  const target = new Schema('ventas');
+  target.addFunction('saludo', 'quien text', { kind: 'FUNCTION', definition: 'A' });
+
+  const result = compare({ source, target });
+  assert.deepEqual(Object.keys(result.sqlById), ['fn_add:saludo(quien integer)']);
+});
+
+test('una función con otro cuerpo se reemplaza', () => {
+  const source = new Schema('ventas');
+  source.addFunction('f', '', { kind: 'FUNCTION', definition: 'CREATE OR REPLACE FUNCTION f()\nnueva' });
+  const target = new Schema('ventas');
+  target.addFunction('f', '', { kind: 'FUNCTION', definition: 'CREATE OR REPLACE FUNCTION f()\nvieja' });
+
+  const result = compare({ source, target });
+  assert.equal(result.sqlById['fn_alter:f()'], 'CREATE OR REPLACE FUNCTION f()\nnueva;');
+  assert.equal(result.rows[0].detail, 'definición distinta (2 líneas → 2 líneas)');
+});
+
+test('la función que sobra se borra comentada, con su firma', () => {
+  const target = new Schema('ventas');
+  target.addFunction('vieja', 'a integer, b text', { kind: 'FUNCTION', definition: 'X' });
+  target.addFunction('proc', '', { kind: 'PROCEDURE', definition: 'Y' });
+
+  const result = compare({ source: new Schema('ventas'), target });
+  assert.equal(result.sqlById['fn_drop:vieja(a integer, b text)'],
+    '-- DROP FUNCTION "vieja"(a integer, b text);');
+  assert.equal(result.sqlById['fn_drop:proc()'], '-- DROP PROCEDURE "proc"();');
+  assert.equal(result.rows.every((r) => r.destructive), true);
+});
+
+// --- Triggers --------------------------------------------------------------
+
+const TRIGGER = 'CREATE TRIGGER t_clientes BEFORE UPDATE ON clientes '
+  + 'FOR EACH ROW EXECUTE FUNCTION trg_touch()';
+
+test('un trigger nuevo se crea tal cual', () => {
+  const source = new Schema('ventas');
+  source.addTrigger('clientes', 't_clientes', TRIGGER);
+
+  const result = compare({ source, target: new Schema('ventas') });
+  assert.equal(result.sqlById['trg_add:clientes:t_clientes'], `${TRIGGER};`);
+  assert.equal(result.rows[0].type, 'Trigger');
+  assert.equal(result.rows[0].table, 'clientes');
+});
+
+test('un trigger distinto se recrea (no hay CREATE OR REPLACE portable)', () => {
+  const source = new Schema('ventas');
+  source.addTrigger('clientes', 't', 'CREATE TRIGGER t BEFORE UPDATE ON clientes nuevo');
+  const target = new Schema('ventas');
+  target.addTrigger('clientes', 't', 'CREATE TRIGGER t BEFORE INSERT ON clientes viejo');
+
+  assert.equal(compare({ source, target }).sqlById['trg_alter:clientes:t'],
+    'DROP TRIGGER "t" ON "clientes";\nCREATE TRIGGER t BEFORE UPDATE ON clientes nuevo;');
+});
+
+test('el trigger que sobra se borra comentado', () => {
+  const target = new Schema('ventas');
+  target.addTrigger('clientes', 'viejo', 'CREATE TRIGGER viejo ...');
+
+  const result = compare({ source: new Schema('ventas'), target });
+  assert.equal(result.sqlById['trg_drop:clientes:viejo'],
+    '-- DROP TRIGGER "viejo" ON "clientes";');
+});
+
+test('el orden del script: función, tabla, trigger y vista', () => {
+  const source = new Schema('ventas');
+  source.addFunction('trg_touch', '', { kind: 'FUNCTION', definition: 'CREATE FUNCTION trg_touch()' });
+  source.addColumn('t', 'id', col(1, 'integer'));
+  source.addTrigger('t', 'tr', 'CREATE TRIGGER tr ...');
+  source.addView('v', 'SELECT id FROM t;');
+
+  assert.deepEqual(Object.keys(compare({ source, target: new Schema('ventas') }).sqlById), [
+    'fn_add:trg_touch()', 'tbl_add:t', 'trg_add:t:tr', 'view_add:v',
+  ]);
+});
