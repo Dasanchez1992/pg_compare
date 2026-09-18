@@ -132,8 +132,17 @@ Requisitos de desarrollo: Node.js 20 o superior.
    - **Proyectos** (página de inicio): guarda un par BD1/BD2 con nombre y
      ejecuta la comparación con un clic cada vez que la necesites.
 3. En el resultado, revisa la grilla de diferencias (filtrable por nombre,
-   tipo y estado) y **marca con los checkboxes** los cambios que quieres
-   incluir. Vienen todos marcados.
+   tabla, tipo y estado) y **marca con los checkboxes** los cambios que
+   quieres incluir. Vienen todos marcados.
+   - El script se arma con **lo marcado**, no con lo que muestra el filtro:
+     al lado de *Objetos* siempre se ve `N de M marcados`, y el botón dice
+     **Generar script (N)**.
+   - Con un filtro puesto, **Marcar solo lo filtrado** deja marcado justo lo
+     que se ve (por ejemplo, una sola tabla) y desmarca el resto. Si quedan
+     filas marcadas que el filtro esconde, sale un aviso con el botón
+     **Desmarcar los ocultos**.
+   - *Marcar todo* y *Desmarcar todo* alcanzan a todas las filas; la casilla
+     de la cabecera, solo a las que se están viendo.
 4. Pulsa **Generar script** y luego **guárdalo como `.sql`** o cópialo.
 
 Cada comparación se guarda en el **Historial**: puedes volver a abrirla
