@@ -15,7 +15,7 @@
  * generan comentadas.
  */
 
-const { byText, byTableAndName } = require('./schema');
+const { byText, byTableAndName, key } = require('./schema');
 
 const NEXTVAL_RE = /nextval\(/;
 
@@ -117,19 +117,25 @@ function itemsOfTable(map, table) {
   return [...map.values()].filter((item) => item.table === table);
 }
 
-/** Definición completa de una tabla: columnas + constraints inline + índices. */
-function createTableSql(table, source) {
+/**
+ * Definición completa de una tabla: columnas + constraints inline + índices.
+ * `deferred` lleva los constraints que hay que dejar fuera (los que cierran
+ * un ciclo de claves foráneas y se emiten después, por separado).
+ */
+function createTableSql(table, source, deferred = new Set()) {
   const cols = source.columns(table);
   const lines = [...cols.entries()]
     .sort((a, b) => a[1].ordinal - b[1].ordinal)
     .map(([name, col]) => `\t${columnDdl(name, col, { forCreate: true })}`);
 
   // Constraints de la tabla, ordenados PK, UNIQUE, CHECK, FK...
-  const cons = itemsOfTable(source.constraints, table).sort((a, b) => {
-    const pa = CONSTRAINT_PRIORITY[a.type] ?? 9;
-    const pb = CONSTRAINT_PRIORITY[b.type] ?? 9;
-    return pa - pb || byText(a.name, b.name);
-  });
+  const cons = itemsOfTable(source.constraints, table)
+    .filter((con) => !deferred.has(key(con.table, con.name)))
+    .sort((a, b) => {
+      const pa = CONSTRAINT_PRIORITY[a.type] ?? 9;
+      const pb = CONSTRAINT_PRIORITY[b.type] ?? 9;
+      return pa - pb || byText(a.name, b.name);
+    });
   for (const con of cons) {
     lines.push(`\tCONSTRAINT ${q(con.name)} ${con.def}`);
   }
@@ -151,6 +157,71 @@ function createTableSql(table, source) {
   if (comments.length) sql += `\n${comments.join('\n')}`;
 
   return sql;
+}
+
+/**
+ * Claves foráneas de una tabla que apuntan a otra tabla del mismo conjunto.
+ * Devuelve Map(tablaDestino -> [nombres de constraint]).
+ */
+function foreignKeysWithin(table, source, within) {
+  const edges = new Map();
+  for (const con of itemsOfTable(source.constraints, table)) {
+    const ref = con.references;
+    if (con.type !== 'FOREIGN KEY' || !ref) continue;
+    if (ref.schema !== source.schemaName) continue;   // apunta a otro esquema
+    if (ref.table === table) continue;                // autorreferencia: válida en el CREATE
+    if (!within.has(ref.table)) continue;             // la otra tabla ya existe en el destino
+    if (!edges.has(ref.table)) edges.set(ref.table, []);
+    edges.get(ref.table).push(con.name);
+  }
+  return edges;
+}
+
+/**
+ * Ordena las tablas nuevas para que cada una se cree después de aquellas a las
+ * que apunta por clave foránea; a igualdad de dependencias, por nombre.
+ *
+ * Si dos tablas se referencian entre sí no hay orden posible: se devuelven en
+ * `deferred` los constraints que cierran el ciclo, para sacarlos del CREATE
+ * TABLE y emitirlos como ALTER después de crear todas las tablas.
+ *
+ * @returns {{ordered: string[], deferred: Set<string>}}
+ */
+function orderNewTables(tables, source) {
+  const within = new Set(tables);
+  const pending = new Set(tables);
+  const dependencies = new Map(
+    tables.map((table) => [table, foreignKeysWithin(table, source, within)]),
+  );
+
+  const ordered = [];
+  const deferred = new Set();
+
+  while (pending.size) {
+    const ready = [...pending]
+      .filter((table) => ![...dependencies.get(table).keys()].some((dep) => pending.has(dep)))
+      .sort(byText);
+
+    if (ready.length) {
+      for (const table of ready) {
+        ordered.push(table);
+        pending.delete(table);
+      }
+      continue;
+    }
+
+    // Lo que queda forma uno o más ciclos. Se rompe el de una sola tabla —la
+    // primera por nombre— y se vuelve a intentar: así se aplazan las menos
+    // claves foráneas posibles y el script queda más limpio.
+    const [table] = [...pending].sort(byText);
+    for (const [dep, names] of [...dependencies.get(table)]) {
+      if (!pending.has(dep)) continue;
+      names.forEach((name) => deferred.add(key(table, name)));
+      dependencies.get(table).delete(dep);
+    }
+  }
+
+  return { ordered, deferred };
 }
 
 /**
@@ -180,18 +251,21 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
   const srcTables = new Set(source.tableNames());
   const tgtTables = new Set(target.tableNames());
   const newTables = [...srcTables].filter((t) => !tgtTables.has(t)).sort(byText);
+  // Las tablas nuevas se crean en orden de dependencias, no alfabético: si una
+  // apunta a otra por clave foránea, la referenciada va primero.
+  const { ordered: newTablesOrdered, deferred } = orderNewTables(newTables, source);
   const onlyTarget = [...tgtTables].filter((t) => !srcTables.has(t)).sort(byText);
   const common = [...srcTables].filter((t) => tgtTables.has(t)).sort(byText);
   const isNewTable = new Set(newTables);
 
   // --- Tablas nuevas: CREATE TABLE completo --------------------------
-  for (const table of newTables) {
+  for (const table of newTablesOrdered) {
     const nCols = source.columns(table).size;
     const nCons = itemsOfTable(source.constraints, table).length;
     const nIdx = itemsOfTable(source.indexes, table).length;
     add('tables_create', `tbl_add:${table}`, table, table,
       `${nCols} columnas, ${nCons} constraints, ${nIdx} índices · solo existe en ${db2Name}`,
-      createTableSql(table, source));
+      createTableSql(table, source, deferred));
   }
 
   // --- Tablas que sobran: DROP TABLE (comentado) ---------------------
@@ -275,7 +349,9 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
 
   // --- Constraints (idem: los de tablas nuevas van inline) -----------
   for (const con of missing(source.constraints, target.constraints)) {
-    if (isNewTable.has(con.table)) continue;
+    // Los de las tablas nuevas ya van dentro de su CREATE TABLE, salvo los
+    // aplazados para romper un ciclo de claves foráneas.
+    if (isNewTable.has(con.table) && !deferred.has(key(con.table, con.name))) continue;
     add('constraints_add', `con_add:${con.table}:${con.name}`, con.table, con.name,
       `${con.type} — ${con.def} · solo existe en ${db2Name}`,
       `ALTER TABLE ${q(con.table)} ADD CONSTRAINT ${q(con.name)} ${con.def};`);
@@ -351,6 +427,7 @@ module.exports = {
   compare,
   buildScript,
   createTableSql,
+  orderNewTables,
   columnDdl,
   commentSql,
   literal,

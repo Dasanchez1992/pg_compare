@@ -49,14 +49,21 @@ WHERE n.nspname = $1
 ORDER BY c.relname, i.relname;
 `;
 
+// `ref_schema`/`ref_table` dicen a qué apunta una clave foránea. Se leen del
+// catálogo en vez de sacarlos del texto de la definición, que habría que
+// parsear con sus comillas y esquemas.
 const CONSTRAINTS_SQL = `
 SELECT c.relname                       AS table_name,
        con.conname                     AS constraint_name,
        con.contype                     AS constraint_type,
-       pg_get_constraintdef(con.oid)   AS definition
+       pg_get_constraintdef(con.oid)   AS definition,
+       fn.nspname                      AS ref_schema,
+       fc.relname                      AS ref_table
 FROM pg_constraint con
-JOIN pg_class c      ON c.oid = con.conrelid
-JOIN pg_namespace n  ON n.oid = c.relnamespace
+JOIN pg_class c           ON c.oid = con.conrelid
+JOIN pg_namespace n       ON n.oid = c.relnamespace
+LEFT JOIN pg_class fc     ON fc.oid = con.confrelid
+LEFT JOIN pg_namespace fn ON fn.oid = fc.relnamespace
 WHERE n.nspname = $1
   AND c.relkind = 'r'
 ORDER BY c.relname, con.conname;
@@ -125,6 +132,7 @@ async function introspect(conn) {
         row.constraint_name,
         CONTYPE_LABEL[row.constraint_type] || row.constraint_type,
         row.definition,
+        row.ref_table ? { schema: row.ref_schema, table: row.ref_table } : null,
       );
     }
 

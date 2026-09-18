@@ -37,6 +37,13 @@ El script va envuelto en `BEGIN; ... COMMIT;` y fija
 `SET LOCAL search_path` al esquema de BD1, así las sentencias aplican
 sobre el esquema correcto aunque no sea `public`.
 
+Las tablas nuevas se crean **en orden de dependencias**: si una apunta a otra
+por clave foránea, la referenciada va primero. Cuando dos tablas se
+referencian entre sí no existe tal orden, así que la clave foránea que cierra
+el ciclo sale del `CREATE TABLE` y se añade con un `ALTER TABLE` después de
+crear ambas. Una tabla que se referencia a sí misma (`jefe_id` apuntando a la
+propia tabla) no necesita nada de esto y se queda dentro de su `CREATE`.
+
 ## Instalación
 
 Descarga el instalador de tu sistema (`.exe`, `.dmg`, `.AppImage` o `.deb`)

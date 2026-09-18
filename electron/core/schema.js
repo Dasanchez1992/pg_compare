@@ -31,7 +31,10 @@ class Schema {
     this.tables = new Map();
     /** @type {Map<string, {table:string, name:string, def:string}>} */
     this.indexes = new Map();
-    /** @type {Map<string, {table:string, name:string, type:string, def:string}>} */
+    /**
+     * @type {Map<string, {table:string, name:string, type:string, def:string,
+     *   references:?{schema:string, table:string}}>}
+     */
     this.constraints = new Map();
   }
 
@@ -44,8 +47,11 @@ class Schema {
     this.indexes.set(key(table, name), { table, name, def });
   }
 
-  addConstraint(table, name, type, def) {
-    this.constraints.set(key(table, name), { table, name, type, def });
+  /** `references` solo viene en las claves foráneas: a qué tabla apuntan. */
+  addConstraint(table, name, type, def, references = null) {
+    this.constraints.set(key(table, name), {
+      table, name, type, def, references,
+    });
   }
 
   /** Columnas de una tabla, o un mapa vacío si no existe. */
