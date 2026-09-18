@@ -74,6 +74,20 @@ function q(identifier) {
   return `"${String(identifier).replace(/"/g, '""')}"`;
 }
 
+/** Literal de texto de PostgreSQL, con las comillas simples escapadas. */
+function literal(text) {
+  return `'${String(text).replace(/'/g, "''")}'`;
+}
+
+/**
+ * Comentario de una columna. `null` borra el que hubiera: en PostgreSQL no
+ * existe "quitar el comentario", se asigna NULL.
+ */
+function commentSql(table, column, comment) {
+  const value = comment === null || comment === undefined ? 'NULL' : literal(comment);
+  return `COMMENT ON COLUMN ${q(table)}.${q(column)} IS ${value};`;
+}
+
 /** Texto legible para los valores que se muestran en la columna "Detalle". */
 const yesNo = (value) => (value ? 'sí' : 'no');
 const orNone = (value) => (value === null || value === undefined ? '(ninguno)' : value);
@@ -128,6 +142,14 @@ function createTableSql(table, source) {
   if (indexes.length) {
     sql += `\n${indexes.map((idx) => `${idx.def};`).join('\n')}`;
   }
+
+  // Los comentarios de columna no caben dentro del CREATE TABLE.
+  const comments = [...cols.entries()]
+    .filter(([, col]) => col.comment)
+    .sort((a, b) => a[1].ordinal - b[1].ordinal)
+    .map(([name, col]) => commentSql(table, name, col.comment));
+  if (comments.length) sql += `\n${comments.join('\n')}`;
+
   return sql;
 }
 
@@ -186,9 +208,11 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
     const tgtNames = [...tgtCols.keys()].sort(byText);
 
     for (const col of srcNames.filter((c) => !tgtCols.has(c))) {
+      const info = srcCols.get(col);
+      let sql = `ALTER TABLE ${q(table)} ADD COLUMN ${columnDdl(col, info)};`;
+      if (info.comment) sql += `\n${commentSql(table, col, info.comment)}`;
       add('columns_add', `col_add:${table}:${col}`, table, col,
-        `${srcCols.get(col).dataType} · solo existe en ${db2Name}`,
-        `ALTER TABLE ${q(table)} ADD COLUMN ${columnDdl(col, srcCols.get(col))};`);
+        `${info.dataType} · solo existe en ${db2Name}`, sql);
     }
 
     for (const col of tgtNames.filter((c) => !srcCols.has(c))) {
@@ -221,6 +245,13 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
           : `ALTER TABLE ${q(table)} ALTER COLUMN ${q(col)} SET DEFAULT ${sDefault};`;
         add('columns_alter', `col_def:${table}:${col}`, table, col,
           `default: ${orNone(tDefault)} → ${orNone(sDefault)}`, stmt);
+      }
+      const sComment = s.comment || null;
+      const tComment = t.comment || null;
+      if (sComment !== tComment) {
+        add('columns_alter', `col_comment:${table}:${col}`, table, col,
+          `comentario: ${orNone(tComment)} → ${orNone(sComment)}`,
+          commentSql(table, col, sComment));
       }
     }
   }
@@ -321,6 +352,8 @@ module.exports = {
   buildScript,
   createTableSql,
   columnDdl,
+  commentSql,
+  literal,
   q,
   GROUP_ORDER,
   GROUP_META,

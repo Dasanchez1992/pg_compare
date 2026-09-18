@@ -3,7 +3,12 @@
   "productName": "Comparador de BD",
   "version": "2.0.0",
   "description": "Aplicación de escritorio para comparar la estructura de dos bases PostgreSQL y generar el script ALTER.",
-  "author": "Danilo Sánchez <danilo.antonio.sanchez@gmail.com>",
+  "author": {
+    "name": "Danilo Sánchez",
+    "email": "danilo.antonio.sanchez@gmail.com",
+    "url": "https://www.linkedin.com/in/danilo-s%C3%A1nchez-34a391126/"
+  },
+  "desktopName": "pg-compare.desktop",
   "main": "electron/main.js",
   "private": true,
   "license": "UNLICENSED",
@@ -73,7 +78,8 @@
           "Comment": "Compara la estructura de dos bases PostgreSQL",
           "Keywords": "postgresql;database;diff;sql;"
         }
-      }
+      },
+      "syncDesktopName": true
     }
   }
 }

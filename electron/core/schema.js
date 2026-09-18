@@ -26,7 +26,8 @@ function byTableAndName(a, b) {
 class Schema {
   constructor(schemaName) {
     this.schemaName = schemaName;
-    /** @type {Map<string, Map<string, {ordinal:number, dataType:string, notNull:boolean, default:?string}>>} */
+    /** @type {Map<string, Map<string, {ordinal:number, dataType:string,
+     *   notNull:boolean, default:?string, comment:?string}>>} */
     this.tables = new Map();
     /** @type {Map<string, {table:string, name:string, def:string}>} */
     this.indexes = new Map();

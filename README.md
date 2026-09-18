@@ -11,6 +11,8 @@ conexiones de red que abre son las que van a las bases de datos que registres.
 ## Qué compara
 
 - **Campos / columnas** (nuevas, faltantes y modificadas: tipo, NOT NULL, DEFAULT)
+- **Comentarios de las columnas** (`COMMENT ON COLUMN`): los que faltan, los que
+  cambiaron y los que sobran en BD1
 - **Índices** (nuevos, faltantes y con definición diferente)
 - **Constraints** (PRIMARY KEY, FOREIGN KEY, UNIQUE, CHECK, EXCLUSION),
   incluyendo los que existen en ambas bases pero con definición distinta
@@ -212,3 +214,7 @@ compila en Windows y en Linux:
 - Versiones anteriores de este proyecto eran una app web en Django. El
   comparador es el mismo, portado a JavaScript; el historial de git conserva
   aquella versión.
+
+## Autor
+
+**Danilo Sánchez** — [perfil en LinkedIn](https://www.linkedin.com/in/danilo-s%C3%A1nchez-34a391126/)

@@ -20,7 +20,8 @@ SELECT c.relname                                   AS table_name,
        a.attnum                                    AS ordinal,
        format_type(a.atttypid, a.atttypmod)        AS data_type,
        a.attnotnull                                AS not_null,
-       pg_get_expr(d.adbin, d.adrelid)             AS default_value
+       pg_get_expr(d.adbin, d.adrelid)             AS default_value,
+       col_description(c.oid, a.attnum)            AS column_comment
 FROM pg_attribute a
 JOIN pg_class c      ON c.oid = a.attrelid
 JOIN pg_namespace n  ON n.oid = c.relnamespace
@@ -108,6 +109,7 @@ async function introspect(conn) {
         dataType: row.data_type,
         notNull: row.not_null,
         default: row.default_value,
+        comment: row.column_comment,
       });
     }
 
