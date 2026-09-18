@@ -424,3 +424,135 @@ test('una clave foránea a otro esquema no cuenta como dependencia', () => {
   // Apunta a "z_padre" pero de otro esquema: no debe reordenar nada.
   assert.deepEqual(ordenDeCreacion(source), ['a_hijo', 'z_padre']);
 });
+
+// --- Vistas ----------------------------------------------------------------
+
+const VISTA = 'SELECT id,\n    nombre\n   FROM clientes\n  WHERE activo;';
+
+test('una vista nueva se crea entera', () => {
+  const source = new Schema('ventas');
+  source.addView('clientes_activos', VISTA);
+  const result = compare({ source, target: new Schema('ventas'), db2Name: 'prod' });
+
+  assert.equal(result.sqlById['view_add:clientes_activos'],
+    `CREATE VIEW "clientes_activos" AS\n${VISTA}`);
+  const fila = result.rows.find((r) => r.id === 'view_add:clientes_activos');
+  assert.equal(fila.type, 'Vista');
+  assert.equal(fila.detail, '4 líneas · solo existe en prod');
+});
+
+test('una vista con otra definición se reemplaza sin borrarla', () => {
+  const source = new Schema('ventas');
+  source.addView('v', 'SELECT 1;');
+  const target = new Schema('ventas');
+  target.addView('v', 'SELECT 2;');
+
+  const result = compare({ source, target });
+  assert.equal(result.sqlById['view_alter:v'], 'CREATE OR REPLACE VIEW "v" AS\nSELECT 1;');
+});
+
+test('una vista igual no genera diferencia', () => {
+  const source = new Schema('ventas');
+  source.addView('v', VISTA);
+  const target = new Schema('ventas');
+  target.addView('v', VISTA);
+  assert.equal(compare({ source, target }).totalChanges, 0);
+});
+
+test('la vista que sobra se borra comentada', () => {
+  const target = new Schema('ventas');
+  target.addView('vieja', 'SELECT 1;');
+  const result = compare({ source: new Schema('ventas'), target });
+
+  assert.equal(result.sqlById['view_drop:vieja'], '-- DROP VIEW "vieja";');
+  assert.equal(result.rows[0].destructive, true);
+});
+
+test('las vistas se crean después de las tablas que leen', () => {
+  const source = new Schema('ventas');
+  source.addColumn('clientes', 'id', col(1, 'integer'));
+  source.addView('a_vista', 'SELECT id FROM clientes;');
+  source.addViewDependency('a_vista', 'clientes');
+
+  const ids = Object.keys(compare({ source, target: new Schema('ventas') }).sqlById);
+  assert.ok(ids.indexOf('tbl_add:clientes') < ids.indexOf('view_add:a_vista'));
+});
+
+test('una vista que lee de otra va después de esa otra', () => {
+  const source = new Schema('ventas');
+  source.addView('a_encima', 'SELECT * FROM z_base;');
+  source.addView('z_base', 'SELECT 1;');
+  source.addViewDependency('a_encima', 'z_base');
+
+  const ids = Object.keys(compare({ source, target: new Schema('ventas') }).sqlById);
+  assert.deepEqual(ids, ['view_add:z_base', 'view_add:a_encima']);
+});
+
+// --- Secuencias ------------------------------------------------------------
+
+const secuencia = (extra = {}) => ({
+  dataType: 'bigint', start: '1', min: '1', max: '9223372036854775807',
+  increment: '1', cycle: false, cache: '1', ...extra,
+});
+
+test('una secuencia nueva se crea con todos sus atributos', () => {
+  const source = new Schema('ventas');
+  source.addSequence('numeracion', secuencia({ start: '1000' }));
+
+  assert.equal(compare({ source, target: new Schema('ventas') }).sqlById['seq_add:numeracion'], [
+    'CREATE SEQUENCE "numeracion"',
+    '    AS bigint',
+    '    INCREMENT BY 1',
+    '    MINVALUE 1',
+    '    MAXVALUE 9223372036854775807',
+    '    START WITH 1000',
+    '    CACHE 1',
+    '    NO CYCLE;',
+  ].join('\n'));
+});
+
+test('solo se alteran los atributos que cambiaron', () => {
+  const source = new Schema('ventas');
+  source.addSequence('s', secuencia({ increment: '2', start: '100' }));
+  const target = new Schema('ventas');
+  target.addSequence('s', secuencia());
+
+  const result = compare({ source, target });
+  assert.equal(result.sqlById['seq_alter:s'],
+    'ALTER SEQUENCE "s" INCREMENT BY 2 START WITH 100;');
+  assert.equal(result.rows[0].detail, 'incremento: 1 → 2 · inicio: 1 → 100');
+});
+
+test('activar y desactivar el ciclo', () => {
+  const source = new Schema('ventas');
+  source.addSequence('s', secuencia({ cycle: true }));
+  const target = new Schema('ventas');
+  target.addSequence('s', secuencia({ cycle: false }));
+
+  assert.equal(compare({ source, target }).sqlById['seq_alter:s'],
+    'ALTER SEQUENCE "s" CYCLE;');
+  assert.equal(compare({ source: target, target: source }).sqlById['seq_alter:s'],
+    'ALTER SEQUENCE "s" NO CYCLE;');
+});
+
+test('una secuencia igual no genera diferencia y la que sobra va comentada', () => {
+  const source = new Schema('ventas');
+  source.addSequence('igual', secuencia());
+  const target = new Schema('ventas');
+  target.addSequence('igual', secuencia());
+  target.addSequence('sobra', secuencia());
+
+  const result = compare({ source, target });
+  assert.equal(result.totalChanges, 1);
+  assert.equal(result.sqlById['seq_drop:sobra'], '-- DROP SEQUENCE "sobra";');
+});
+
+test('las secuencias se crean antes que las tablas, y las vistas al final', () => {
+  const source = new Schema('ventas');
+  source.addSequence('s', secuencia());
+  source.addColumn('t', 'id', col(1, 'integer', false, "nextval('s'::regclass)"));
+  source.addView('v', 'SELECT id FROM t;');
+
+  assert.deepEqual(Object.keys(compare({ source, target: new Schema('ventas') }).sqlById),
+    ['seq_add:s', 'tbl_add:t', 'view_add:v']);
+});

@@ -83,6 +83,7 @@
                       <option value="">(todos)</option>
                       <option>Tabla</option><option>Columna</option>
                       <option>Índice</option><option>Constraint</option>
+                      <option>Vista</option><option>Secuencia</option>
                     </select>
                   </th>
                   <th>
