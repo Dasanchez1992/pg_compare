@@ -85,6 +85,7 @@
                       <option>Índice</option><option>Constraint</option>
                       <option>Vista</option><option>Secuencia</option>
                       <option>Función</option><option>Trigger</option>
+                      <option>Partición</option>
                     </select>
                   </th>
                   <th>
