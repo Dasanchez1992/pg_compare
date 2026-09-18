@@ -110,8 +110,78 @@ npm run icon          # regenera build/icon.png
 ```
 
 Salidas: `.dmg`/`.zip` (macOS), `.exe` NSIS y portable (Windows),
-`.AppImage` y `.deb` (Linux), en `dist/`. Cada instalador se construye en su
-propio sistema operativo; para macOS conviene además firmar y notarizar.
+`.AppImage` y `.deb` (Linux), en `dist/`. macOS hay que construirlo en macOS
+(y conviene firmar y notarizar); Windows se puede construir desde Linux o WSL
+si hay `wine` instalado.
+
+## Ejecutarlo en Windows con WSL
+
+Dos caminos, según dónde estén las bases de datos.
+
+### 1. Dentro de WSL (rápido para desarrollar)
+
+Windows 11 muestra la ventana con WSLg sin configurar nada; en Windows 10
+hace falta un servidor X (VcXsrv) y exportar `DISPLAY`.
+
+```bash
+npm install
+npm start
+```
+
+Si la ventana no abre, casi siempre faltan librerías del sistema. Este
+comando dice exactamente cuáles:
+
+```bash
+ldd node_modules/electron/dist/electron | grep "not found"
+```
+
+En Ubuntu 24.04 suele bastar con:
+
+```bash
+sudo apt install -y libnss3 libgbm1 libxshmfence1 libgtk-3-0t64 \
+  libasound2t64 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64
+```
+
+(en Ubuntu 22.04 los mismos paquetes van sin el sufijo `t64`). Si el sandbox
+de Chromium se queja, arranca con `npm start -- --no-sandbox`.
+
+> **Ojo con la red:** desde WSL2, `localhost` es la propia WSL, no Windows.
+> Si PostgreSQL corre en Windows o solo es accesible desde allí, usa la IP del
+> host (`ip route show default | awk '{print $3}'`) en vez de `localhost`, o
+> mejor usa el ejecutable nativo del punto 2.
+
+### 2. Ejecutable nativo de Windows (para usarlo de verdad)
+
+**Sin wine** — genera la aplicación lista para usar, sin instalador:
+
+```bash
+npm run pack:win
+```
+
+Deja `dist/win-unpacked/` con `Comparador de BD.exe` dentro. Esa carpeta se
+copia a donde quieras en Windows (`/mnt/c/...`) y se abre con doble clic:
+no necesita WSL, ni wine, ni Node instalados.
+
+**Con instalador** — electron-builder usa NSIS, que son binarios de 32 bits,
+así que wine necesita soporte i386 (no basta con `wine64`):
+
+```bash
+sudo dpkg --add-architecture i386
+sudo apt update
+sudo apt install -y wine32 wine64
+npm run dist:win
+```
+
+Produce `dist/Comparador de BD Setup <versión>.exe` y la versión portable.
+Si `npm run dist:win` falla con `failed to load ... ntdll.dll` o
+`syswow64`, es exactamente eso: falta el wine de 32 bits.
+
+La tercera opción es instalar Node.js en Windows y ejecutar `npm install` y
+`npm run dist:win` desde PowerShell, sin wine de por medio.
+
+> Ejecutar el `.exe` **dentro de wine** no funciona bien (Chromium necesita
+> DirectComposition, que wine no implementa). No importa: en Windows corre
+> de forma nativa. Wine aquí solo sirve para *construir* el instalador.
 
 ## Notas
 
