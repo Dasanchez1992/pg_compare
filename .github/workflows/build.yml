@@ -1,0 +1,78 @@
+# Compila la aplicación en cada sistema y publica los ejecutables.
+#
+#  · A mano:  pestaña Actions → "Compilar aplicación" → Run workflow.
+#             Los archivos quedan como "artifacts" de la ejecución.
+#  · Release: al empujar una etiqueta (git tag v2.0.0 && git push --tags)
+#             se crea la release con los instaladores adjuntos.
+name: Compilar aplicación
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows (.exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Construir instalador y portable
+        run: npx electron-builder --win --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+          if-no-files-found: error
+
+  linux:
+    name: Linux (AppImage y .deb)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Construir AppImage y .deb
+        run: npx electron-builder --linux --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+          if-no-files-found: error
+
+  release:
+    name: Publicar release
+    needs: [windows, linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Crear la release con los ejecutables
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Comparador de BD ${GITHUB_REF_NAME}" \
+            --notes "Ejecutables generados automáticamente desde ${GITHUB_SHA}." \
+            artifacts/windows/* artifacts/linux/*

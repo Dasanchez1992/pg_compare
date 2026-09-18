@@ -179,6 +179,21 @@ Si `npm run dist:win` falla con `failed to load ... ntdll.dll` o
 La tercera opción es instalar Node.js en Windows y ejecutar `npm install` y
 `npm run dist:win` desde PowerShell, sin wine de por medio.
 
+### 3. Sin compilar nada: dejar que lo haga GitHub
+
+El repositorio trae un flujo de trabajo (`.github/workflows/build.yml`) que
+compila en Windows y en Linux:
+
+- **A demanda**: pestaña *Actions* → *Compilar aplicación* → *Run workflow*.
+  Al terminar, los ejecutables quedan descargables como *artifacts* de esa
+  ejecución.
+- **Como release**: al empujar una etiqueta se publica una release con los
+  instaladores adjuntos.
+
+  ```bash
+  git tag v2.0.0 && git push origin v2.0.0
+  ```
+
 > Ejecutar el `.exe` **dentro de wine** no funciona bien (Chromium necesita
 > DirectComposition, que wine no implementa). No importa: en Windows corre
 > de forma nativa. Wine aquí solo sirve para *construir* el instalador.

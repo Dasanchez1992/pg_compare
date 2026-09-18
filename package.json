@@ -9,7 +9,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "start": "electron .",
-    "test": "node --test \"test/*.test.js\"",
+    "test": "node --test",
     "icon": "node build/make-icon.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
