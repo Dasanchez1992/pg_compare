@@ -83,7 +83,8 @@
                       <option value="">(todos)</option>
                       <option>Tabla</option><option>Columna</option>
                       <option>Índice</option><option>Constraint</option>
-                      <option>Vista</option><option>Secuencia</option>
+                      <option>Vista</option><option>Vista mat.</option>
+                      <option>Secuencia</option>
                       <option>Función</option><option>Trigger</option>
                       <option>Partición</option>
                       <option>Tipo</option><option>Dominio</option>

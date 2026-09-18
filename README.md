@@ -26,6 +26,11 @@ avisarte de versiones nuevas: nada más, y nada de tus datos sale del equipo.
   actualizan con `CREATE OR REPLACE VIEW`, que no borra nada ni pierde los
   permisos; si cambió la lista de columnas PostgreSQL lo rechaza y, como el
   script va en una transacción, no queda nada a medias
+- **Vistas materializadas**, con sus índices propios. No admiten
+  `CREATE OR REPLACE`, así que la que cambia se borra y se rehace —y con ella
+  sus índices, que el `DROP` se lleva por delante, por eso van dentro de la
+  misma sentencia. Se crean **sin datos**, con un `REFRESH` comentado detrás:
+  poblarlas puede tardar mucho y esa decisión es de quien aplica el script
 - **Secuencias** independientes: se crean, se borran o se ajustan solo los
   atributos que cambiaron (tipo, incremento, mínimo, máximo, inicio, caché y
   ciclo). Las que respaldan un `serial` no se tocan: las crea PostgreSQL junto
@@ -47,8 +52,8 @@ Además puedes **guardar N conexiones** y seleccionarlas para comparar.
 
 ### Qué no compara todavía
 
-Conviene saberlo antes de confiar en un "no hay diferencias": **vistas
-materializadas, tipos RANGE, extensiones y permisos** no se comparan.
+Conviene saberlo antes de confiar en un "no hay diferencias": **los tipos
+RANGE, las extensiones y los permisos** no se comparan.
 
 Algunas diferencias PostgreSQL no permite resolverlas con un `ALTER`: quitarle
 un valor a un enum, cambiar el tipo base de un dominio o convertir un tipo en
@@ -88,8 +93,8 @@ El orden del script respeta las dependencias: los tipos del usuario primero de
 todo, luego secuencias y funciones
 (una columna puede tener `DEFAULT nextval(...)` o llamar a una función), luego
 las tablas con sus índices y constraints, después los triggers —que necesitan su
-tabla y su función— y al final las vistas; entre vistas, la que lee de otra va
-después.
+tabla y su función— y al final las vistas; entre vistas —normales y
+materializadas juntas—, la que lee de otra va después.
 
 El script incluye `SET LOCAL check_function_bodies = false`, igual que hace
 `pg_dump`: sin eso, una función SQL que lea de una tabla que el propio script
