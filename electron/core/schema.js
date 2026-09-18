@@ -68,6 +68,19 @@ class Schema {
      *   partitionBy:?string}>}
      */
     this.partitions = new Map();
+    /**
+     * Tipos definidos por el usuario: enum, dominios y compuestos. Cada uno se
+     * crea y se altera de forma distinta, así que llevan su `kind`.
+     * @type {Map<string, {name:string, kind:string, values?:string[],
+     *   baseType?:string, notNull?:boolean, default?:?string,
+     *   checks?:object[], attributes?:object[], dependsOn:Set<string>}>}
+     */
+    this.types = new Map();
+  }
+
+  /** Declara un tipo. `dependsOn` son otros tipos del esquema que necesita. */
+  addType(name, info) {
+    this.types.set(name, { name, dependsOn: new Set(), ...info });
   }
 
   /** Declara una tabla (con su clave de partición, si la tiene). */

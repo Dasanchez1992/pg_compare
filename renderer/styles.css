@@ -132,6 +132,8 @@ pre code.hljs { padding:0; background:transparent; font-family:
 .b-add { background:rgba(52,211,153,.15); color:var(--green); border-color:rgba(52,211,153,.3); }
 .b-del { background:rgba(248,113,113,.15); color:var(--red); border-color:rgba(248,113,113,.3); }
 .b-chg { background:rgba(251,191,36,.15); color:var(--amber); border-color:rgba(251,191,36,.3); }
+/* "Manual": el script no puede arreglarlo solo, solo explica qué hacer. */
+.b-man { background:rgba(148,163,184,.15); color:#94a3b8; border-color:rgba(148,163,184,.35); }
 
 /* ---- Paneles horizontales (grupos de diferencias) ---- */
 .panels { display:flex; gap:1rem; overflow-x:auto; padding-bottom:.75rem; align-items:flex-start; }

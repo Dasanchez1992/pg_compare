@@ -37,6 +37,10 @@ const CONSTRAINT_PRIORITY = {
 
 // Grupos en el orden en que se emiten al script.
 const GROUP_ORDER = [
+  // Los tipos, los primeros de todos: una columna, una función o un dominio
+  // pueden usarlos.
+  'types_create',
+  'types_alter',
   // Las secuencias van primero: una columna puede tener DEFAULT nextval(...).
   'sequences_create',
   'sequences_alter',
@@ -69,12 +73,13 @@ const GROUP_ORDER = [
   'views_drop',
   'functions_drop',
   'sequences_drop',
+  'types_drop',
 ];
 
 const DESTRUCTIVE_GROUPS = new Set([
   'tables_drop', 'columns_drop', 'indexes_drop', 'constraints_drop',
   'views_drop', 'sequences_drop', 'functions_drop', 'triggers_drop',
-  'partitions_drop',
+  'partitions_drop', 'types_drop',
 ]);
 
 // Metadatos por grupo para la grilla: [tipo, estado, clase del badge].
@@ -99,6 +104,9 @@ const GROUP_META = {
   functions_create: ['Función', 'Nuevo', 'b-add'],
   functions_alter: ['Función', 'Diferente', 'b-chg'],
   functions_drop: ['Función', 'Sobra', 'b-del'],
+  types_create: ['Tipo', 'Nuevo', 'b-add'],
+  types_alter: ['Tipo', 'Diferente', 'b-chg'],
+  types_drop: ['Tipo', 'Sobra', 'b-del'],
   partitions_create: ['Partición', 'Nuevo', 'b-add'],
   partitions_alter: ['Partición', 'Diferente', 'b-chg'],
   partitions_drop: ['Partición', 'Sobra', 'b-del'],
@@ -281,6 +289,41 @@ function orderNewViews(views, source) {
   return topologicalOrder(views, dependencies, (stuck, deps) => deps.get(stuck[0]).clear());
 }
 
+/** Etiqueta del tipo para la grilla: los dominios se distinguen. */
+const typeLabel = (type) => (type.kind === 'domain' ? 'Dominio' : 'Tipo');
+
+/**
+ * Marca una fila como "Manual": el script no puede arreglarla solo y su SQL
+ * es únicamente la explicación de qué hay que hacer. Pasa con lo que
+ * PostgreSQL no deja alterar (quitar un valor de un enum, cambiar el tipo base
+ * de un dominio o la clase de un tipo).
+ */
+const MANUAL = (type) => ({
+  type: typeLabel(type), status: 'Manual', statusClass: 'b-man', manual: true,
+});
+
+/** Sentencia CREATE de un tipo del usuario. */
+function createTypeSql(type) {
+  if (type.kind === 'enum') {
+    return `CREATE TYPE ${q(type.name)} AS ENUM (\n`
+      + `${type.values.map((v) => `    ${literal(v)}`).join(',\n')}\n);`;
+  }
+  if (type.kind === 'composite') {
+    return `CREATE TYPE ${q(type.name)} AS (\n`
+      + `${type.attributes.map((a) => `    ${q(a.name)} ${a.dataType}`).join(',\n')}\n);`;
+  }
+  // Dominio: tipo base, y después default, NOT NULL y sus CHECK.
+  const parts = [`CREATE DOMAIN ${q(type.name)} AS ${type.baseType}`];
+  if (type.default !== null && type.default !== undefined) {
+    parts.push(`    DEFAULT ${type.default}`);
+  }
+  if (type.notNull) parts.push('    NOT NULL');
+  for (const check of type.checks) {
+    parts.push(`    CONSTRAINT ${q(check.name)} ${check.definition}`);
+  }
+  return `${parts.join('\n')};`;
+}
+
 /** Sentencia CREATE de una secuencia independiente. */
 function createSequenceSql(seq) {
   return [
@@ -340,12 +383,23 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
   const rows = [];
   const sqlById = {};
 
-  const add = (group, id, table, name, detail, sql) => {
+  /**
+   * `extra` permite matizar una fila: su etiqueta de tipo, y el estado
+   * "Manual" para lo que el script no puede arreglar solo.
+   */
+  const add = (group, id, table, name, detail, sql, extra = {}) => {
     const [type, status, statusClass] = GROUP_META[group];
     rows.push({
-      id, group, table, name, detail, type, status,
-      statusClass,
-      destructive: DESTRUCTIVE_GROUPS.has(group),
+      id,
+      group,
+      table,
+      name,
+      detail,
+      type: extra.type || type,
+      status: extra.status || status,
+      statusClass: extra.statusClass || statusClass,
+      destructive: extra.destructive ?? DESTRUCTIVE_GROUPS.has(group),
+      manual: Boolean(extra.manual),
     });
     sqlById[id] = sql;
   };
@@ -359,6 +413,59 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
   const onlyTarget = [...tgtTables].filter((t) => !srcTables.has(t)).sort(byText);
   const common = [...srcTables].filter((t) => tgtTables.has(t)).sort(byText);
   const isNewTable = new Set(newTables);
+
+  // --- Tipos del usuario ----------------------------------------------
+  const srcTypes = source.types;
+  const tgtTypes = target.types;
+  const byName = ([a], [b]) => byText(a, b);
+
+  // Un dominio sobre un enum, o un compuesto con un atributo de otro tipo, se
+  // crea después de aquel del que depende.
+  const newTypes = [...srcTypes.keys()].filter((name) => !tgtTypes.has(name)).sort(byText);
+  const typeDeps = new Map(newTypes.map((name) => {
+    const deps = new Map();
+    for (const dep of srcTypes.get(name).dependsOn) {
+      if (newTypes.includes(dep)) deps.set(dep, true);
+    }
+    return [name, deps];
+  }));
+
+  for (const name of topologicalOrder(newTypes, typeDeps, (stuck, deps) => deps.get(stuck[0]).clear())) {
+    const type = srcTypes.get(name);
+    const detalle = type.kind === 'enum'
+      ? `enum (${type.values.length} valores) · solo existe en ${db2Name}`
+      : type.kind === 'domain'
+        ? `dominio sobre ${type.baseType} · solo existe en ${db2Name}`
+        : `tipo compuesto (${type.attributes.length} campos) · solo existe en ${db2Name}`;
+    add('types_create', `type_add:${name}`, name, name, detalle,
+      createTypeSql(type), { type: typeLabel(type) });
+  }
+
+  for (const [name, type] of [...srcTypes].sort(byName)) {
+    const current = tgtTypes.get(name);
+    if (!current) continue;
+    if (current.kind !== type.kind) {
+      // Cambiar la clase de un tipo obliga a recrearlo, y eso arrastra a todo
+      // lo que lo use: se avisa, no se intenta.
+      add('types_alter', `type_kind:${name}`, name, name,
+        `cambió de ${current.kind} a ${type.kind}: hay que recrearlo a mano`,
+        `-- El tipo ${q(name)} es ${current.kind} en ${db1Name} y ${type.kind} en ${db2Name}.\n`
+        + '-- Cambiar la clase de un tipo exige borrarlo y recrearlo, junto con\n'
+        + '-- todo lo que lo usa. Revísalo a mano.', MANUAL(type));
+      continue;
+    }
+    if (type.kind === 'enum') compareEnum(add, name, type, current, db1Name, db2Name);
+    else if (type.kind === 'domain') compareDomain(add, name, type, current, db1Name, db2Name);
+    else compareComposite(add, name, type, current, db1Name, db2Name);
+  }
+
+  for (const [name, type] of [...tgtTypes].sort(byName)) {
+    if (srcTypes.has(name)) continue;
+    const palabra = type.kind === 'domain' ? 'DOMAIN' : 'TYPE';
+    add('types_drop', `type_drop:${name}`, name, name,
+      `${type.kind} · solo existe en ${db1Name}`,
+      `-- DROP ${palabra} ${q(name)};`, { type: typeLabel(type) });
+  }
 
   // --- Secuencias independientes -------------------------------------
   const srcSequences = source.sequences;
@@ -626,6 +733,108 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
   return { rows, sqlById, totalChanges: rows.length };
 }
 
+/**
+ * Enum: solo se pueden añadir valores. Se usa BEFORE para que el valor nuevo
+ * caiga en su sitio y no siempre al final.
+ */
+function compareEnum(add, name, type, current, db1Name, db2Name) {
+  const existentes = new Set(current.values);
+  type.values.forEach((value, index) => {
+    if (existentes.has(value)) return;
+    // El primer valor posterior que ya exista marca dónde insertarlo.
+    const siguiente = type.values.slice(index + 1).find((v) => existentes.has(v));
+    add('types_alter', `type_value:${name}:${value}`, name, name,
+      `valor nuevo ${literal(value)} · solo existe en ${db2Name}`,
+      `ALTER TYPE ${q(name)} ADD VALUE ${literal(value)}`
+      + `${siguiente ? ` BEFORE ${literal(siguiente)}` : ''};`, { type: typeLabel(type) });
+  });
+
+  const deseados = new Set(type.values);
+  for (const value of current.values.filter((v) => !deseados.has(v))) {
+    add('types_alter', `type_value_drop:${name}:${value}`, name, name,
+      `valor ${literal(value)} sobra en ${db1Name}: no se puede quitar`,
+      `-- PostgreSQL no permite quitar el valor ${literal(value)} del enum ${q(name)}.\n`
+      + '-- Para eliminarlo hay que recrear el tipo y actualizar todo lo que lo usa.',
+      MANUAL(type));
+  }
+}
+
+/** Dominio: el tipo base no se puede alterar; lo demás sí. */
+function compareDomain(add, name, type, current, db1Name, db2Name) {
+  if (type.baseType !== current.baseType) {
+    add('types_alter', `type_base:${name}`, name, name,
+      `tipo base: ${current.baseType} → ${type.baseType} (no se puede alterar)`,
+      `-- El dominio ${q(name)} es ${current.baseType} en ${db1Name} y `
+      + `${type.baseType} en ${db2Name}.\n`
+      + '-- PostgreSQL no permite cambiar el tipo base: hay que recrear el dominio.',
+      MANUAL(type));
+  }
+
+  if (Boolean(type.notNull) !== Boolean(current.notNull)) {
+    add('types_alter', `type_null:${name}`, name, name,
+      `NOT NULL: ${current.notNull ? 'sí' : 'no'} → ${type.notNull ? 'sí' : 'no'}`,
+      `ALTER DOMAIN ${q(name)} ${type.notNull ? 'SET' : 'DROP'} NOT NULL;`,
+      { type: typeLabel(type) });
+  }
+
+  const sDefault = type.default || null;
+  const tDefault = current.default || null;
+  if (sDefault !== tDefault) {
+    add('types_alter', `type_default:${name}`, name, name,
+      `default: ${orNone(tDefault)} → ${orNone(sDefault)}`,
+      `ALTER DOMAIN ${q(name)} ${sDefault === null ? 'DROP DEFAULT' : `SET DEFAULT ${sDefault}`};`,
+      { type: typeLabel(type) });
+  }
+
+  const actuales = new Map(current.checks.map((c) => [c.name, c.definition]));
+  for (const check of type.checks) {
+    const existente = actuales.get(check.name);
+    if (existente === check.definition) continue;
+    add('types_alter', `type_check:${name}:${check.name}`, name, name,
+      existente
+        ? `${check.name}: ${existente} → ${check.definition}`
+        : `restricción nueva ${check.name} · solo existe en ${db2Name}`,
+      (existente ? `ALTER DOMAIN ${q(name)} DROP CONSTRAINT ${q(check.name)};\n` : '')
+      + `ALTER DOMAIN ${q(name)} ADD CONSTRAINT ${q(check.name)} ${check.definition};`,
+      { type: typeLabel(type) });
+  }
+  const deseadas = new Set(type.checks.map((c) => c.name));
+  for (const check of current.checks.filter((c) => !deseadas.has(c.name))) {
+    add('types_alter', `type_check_drop:${name}:${check.name}`, name, name,
+      `restricción ${check.name} · solo existe en ${db1Name}`,
+      `-- ALTER DOMAIN ${q(name)} DROP CONSTRAINT ${q(check.name)};`,
+      { type: typeLabel(type), status: 'Sobra', statusClass: 'b-del', destructive: true });
+  }
+}
+
+/** Tipo compuesto: se comparan sus campos, como si fueran columnas. */
+function compareComposite(add, name, type, current, db1Name, db2Name) {
+  const actuales = new Map(current.attributes.map((a) => [a.name, a]));
+  const deseados = new Map(type.attributes.map((a) => [a.name, a]));
+
+  for (const attr of type.attributes) {
+    const existente = actuales.get(attr.name);
+    if (!existente) {
+      add('types_alter', `type_attr_add:${name}:${attr.name}`, name, name,
+        `campo nuevo ${attr.name} ${attr.dataType} · solo existe en ${db2Name}`,
+        `ALTER TYPE ${q(name)} ADD ATTRIBUTE ${q(attr.name)} ${attr.dataType};`,
+        { type: typeLabel(type) });
+    } else if (existente.dataType !== attr.dataType) {
+      add('types_alter', `type_attr_type:${name}:${attr.name}`, name, name,
+        `campo ${attr.name}: ${existente.dataType} → ${attr.dataType}`,
+        `ALTER TYPE ${q(name)} ALTER ATTRIBUTE ${q(attr.name)} TYPE ${attr.dataType};`,
+        { type: typeLabel(type) });
+    }
+  }
+
+  for (const attr of current.attributes.filter((a) => !deseados.has(a.name))) {
+    add('types_alter', `type_attr_drop:${name}:${attr.name}`, name, name,
+      `campo ${attr.name} · solo existe en ${db1Name}`,
+      `-- ALTER TYPE ${q(name)} DROP ATTRIBUTE ${q(attr.name)};`,
+      { type: typeLabel(type), status: 'Sobra', statusClass: 'b-del', destructive: true });
+  }
+}
+
 /** "3 líneas" — para describir una definición sin volcarla en la grilla. */
 function lineCount(text) {
   const lines = String(text).trim().split('\n').length;
@@ -691,6 +900,7 @@ module.exports = {
   buildScript,
   createTableSql,
   createSequenceSql,
+  createTypeSql,
   orderNewTables,
   orderNewViews,
   columnDdl,
