@@ -8,6 +8,10 @@
     "email": "danilo.antonio.sanchez@gmail.com",
     "url": "https://www.linkedin.com/in/danilo-s%C3%A1nchez-34a391126/"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dasanchez1992/pg_compare.git"
+  },
   "desktopName": "pg-compare.desktop",
   "main": "electron/main.js",
   "private": true,

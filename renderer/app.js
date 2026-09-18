@@ -78,11 +78,14 @@ function plural(count, singular, pluralForm) {
 
 // --- Avisos ---------------------------------------------------------------
 
-/** Muestra un aviso arriba (equivale a los mensajes flash de antes). */
-function notify(text, kind = 'success', { sticky = false } = {}) {
+/**
+ * Muestra un aviso arriba (equivale a los mensajes flash de antes).
+ * Con `html: true` el texto se inserta tal cual, para avisos con formato.
+ */
+function notify(text, kind = 'success', { sticky = false, html: asHtml = false } = {}) {
   const box = $('#messages');
   const el = node(html`
-    <div class="msg ${kind}"><span>${text}</span>
+    <div class="msg ${kind}"><span>${asHtml ? raw(text) : text}</span>
       <button class="close" aria-label="Cerrar">&times;</button>
     </div>`).firstElementChild;
 

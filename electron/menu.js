@@ -27,8 +27,8 @@ async function aboutDialog(win) {
       `Chromium: ${process.versions.chrome}`,
       `Node: ${process.versions.node}`,
       '',
-      'Aplicación local: no envía nada a internet y solo se conecta a las',
-      'bases de datos que registres.',
+      'Aplicación local: solo se conecta a las bases de datos que registres',
+      'y, si lo dejas activado, a GitHub para mirar si hay una versión nueva.',
       '',
       `Datos: ${app.getPath('userData')}`,
     ].join('\n'),
@@ -39,11 +39,39 @@ async function aboutDialog(win) {
   if (response === 1) shell.openExternal(AUTHOR.url);
 }
 
+/** Comprobación manual: responde siempre, también si ya está al día. */
+async function checkUpdatesNow(win, { store, logger }) {
+  // Se carga aquí para no crear un ciclo entre menu.js e ipc.js.
+  const { runUpdateCheck } = require('./ipc');
+  try {
+    const result = await runUpdateCheck({
+      store, logger, getWindow: () => win, manual: true,
+    });
+    if (result && result.upToDate) {
+      dialog.showMessageBox(win, {
+        type: 'info',
+        title: 'Buscar actualizaciones',
+        message: `Ya tienes la última versión (${result.version}).`,
+        buttons: ['Cerrar'],
+      });
+    }
+    // Si hay versión nueva, el aviso lo pinta la propia ventana.
+  } catch (error) {
+    dialog.showMessageBox(win, {
+      type: 'warning',
+      title: 'Buscar actualizaciones',
+      message: 'No se pudo comprobar si hay versiones nuevas.',
+      detail: error.message,
+      buttons: ['Cerrar'],
+    });
+  }
+}
+
 /**
  * Menú nativo en español. `getWindow()` devuelve la ventana activa, que
  * puede haberse recreado (macOS permite cerrarla sin salir de la app).
  */
-function buildMenu(getWindow) {
+function buildMenu({ getWindow, store, logger }) {
   const withWindow = (fn) => () => {
     const win = getWindow();
     if (win && !win.isDestroyed()) fn(win);
@@ -130,6 +158,20 @@ function buildMenu(getWindow) {
       role: 'help',
       label: 'Ayuda',
       submenu: [
+        {
+          label: 'Buscar actualizaciones…',
+          click: withWindow((win) => checkUpdatesNow(win, { store, logger })),
+        },
+        {
+          label: 'Avisarme de versiones nuevas',
+          type: 'checkbox',
+          checked: store.settings().updates.enabled,
+          click: (item) => {
+            store.updateSettings('updates', { enabled: item.checked });
+            logger.info(`Aviso de versiones nuevas: ${item.checked ? 'activado' : 'desactivado'}.`);
+          },
+        },
+        { type: 'separator' },
         { label: 'Acerca de', click: withWindow(aboutDialog) },
         { label: 'Abrir carpeta de datos', click: () => shell.openPath(app.getPath('userData')) },
       ],

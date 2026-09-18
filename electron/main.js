@@ -2,13 +2,15 @@
 
 const path = require('path');
 const {
-  app, BrowserWindow, dialog, safeStorage, shell,
+  app, BrowserWindow, Notification, dialog, safeStorage, shell,
 } = require('electron');
 
 const { createCipher } = require('./core/secrets');
 const { createLogger } = require('./logger');
 const { createWindowState } = require('./window-state');
-const { registerIpc } = require('./ipc');
+const {
+  registerIpc, runUpdateCheck, CHECK_EVERY_MS, FIRST_CHECK_DELAY_MS,
+} = require('./ipc');
 const { Store } = require('./core/store');
 const { buildMenu } = require('./menu');
 
@@ -20,6 +22,7 @@ const RENDERER = path.join(__dirname, '..', 'renderer', 'index.html');
 
 let mainWindow = null;
 let logger = null;
+let updateTimer = null;
 
 if (!app.requestSingleInstanceLock()) {
   // Ya hay una instancia abierta: la otra se enfocará sola.
@@ -52,8 +55,47 @@ function start() {
   if (store.loadError) logger.error(store.loadError);
 
   registerIpc({ store, cipher, logger, getWindow: () => mainWindow });
-  buildMenu(() => mainWindow);
+  buildMenu({ getWindow: () => mainWindow, store, logger });
   createWindow();
+  scheduleUpdateChecks(store);
+}
+
+/**
+ * Mira si hay versión nueva poco después de arrancar y luego cada pocas horas.
+ * El primer aviso también sale como notificación del sistema si la ventana no
+ * está en primer plano, que es cuando la app lleva rato abierta de fondo.
+ */
+function scheduleUpdateChecks(store) {
+  const check = async () => {
+    const update = await runUpdateCheck({
+      store, logger, getWindow: () => mainWindow,
+    });
+    if (!update || update.upToDate) return;
+    notifyOutsideApp(update);
+  };
+
+  setTimeout(check, FIRST_CHECK_DELAY_MS);
+  updateTimer = setInterval(check, CHECK_EVERY_MS);
+  app.on('quit', () => clearInterval(updateTimer));
+}
+
+/** Notificación del sistema cuando la ventana no está a la vista. */
+function notifyOutsideApp(update) {
+  const visible = mainWindow && !mainWindow.isDestroyed()
+    && mainWindow.isVisible() && mainWindow.isFocused();
+  if (visible || !Notification.isSupported()) return;
+
+  const notification = new Notification({
+    title: 'Comparador de BD',
+    body: `La versión ${update.version} ya está disponible.`,
+  });
+  notification.on('click', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+  notification.show();
 }
 
 function createWindow() {
