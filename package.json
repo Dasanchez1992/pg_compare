@@ -3,6 +3,7 @@
   "productName": "Comparador de BD",
   "version": "2.0.0",
   "description": "Aplicación de escritorio para comparar la estructura de dos bases PostgreSQL y generar el script ALTER.",
+  "author": "Danilo Sánchez <danilo.antonio.sanchez@gmail.com>",
   "main": "electron/main.js",
   "private": true,
   "license": "UNLICENSED",
@@ -14,6 +15,7 @@
     "dist": "electron-builder",
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win",
+    "pack:win": "electron-builder --win --dir",
     "dist:linux": "electron-builder --linux"
   },
   "dependencies": {
