@@ -67,12 +67,24 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Crear la release con los ejecutables
+      # La etiqueta puede llegar de dos formas: empujada desde la consola (aquí
+      # aún no hay release) o creada desde la web al publicar una release (que
+      # ya existe). Se contemplan las dos para no fallar en la segunda.
+      - name: Publicar los ejecutables en la release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "Comparador de BD ${GITHUB_REF_NAME}" \
-            --notes "Ejecutables generados automáticamente desde ${GITHUB_SHA}." \
-            artifacts/windows/* artifacts/linux/*
+          set -euo pipefail
+          files=(artifacts/windows/* artifacts/linux/*)
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "La release ya existe: adjunto los ejecutables."
+            gh release upload "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+              --clobber "${files[@]}"
+          else
+            echo "Creando la release."
+            gh release create "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "Comparador de BD ${GITHUB_REF_NAME}" \
+              --notes "Ejecutables generados automáticamente desde ${GITHUB_SHA}." \
+              "${files[@]}"
+          fi
