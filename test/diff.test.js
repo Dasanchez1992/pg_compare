@@ -653,3 +653,103 @@ test('el orden del script: función, tabla, trigger y vista', () => {
     'fn_add:trg_touch()', 'tbl_add:t', 'trg_add:t:tr', 'view_add:v',
   ]);
 });
+
+// --- Tablas particionadas --------------------------------------------------
+
+test('una tabla particionada se crea con su PARTITION BY', () => {
+  const source = new Schema('ventas');
+  source.addTable('facturas', 'RANGE (fecha)');
+  source.addColumn('facturas', 'id', col(1, 'bigint', true));
+  source.addColumn('facturas', 'fecha', col(2, 'date', true));
+
+  const result = compare({ source, target: new Schema('ventas'), db2Name: 'prod' });
+  assert.equal(result.sqlById['tbl_add:facturas'], [
+    'CREATE TABLE "facturas" (',
+    '\t"id" bigint NOT NULL,',
+    '\t"fecha" date NOT NULL',
+    ')',
+    'PARTITION BY RANGE (fecha);',
+  ].join('\n'));
+  assert.match(result.rows[0].detail, /^particionada por RANGE \(fecha\) · /);
+});
+
+test('una partición se crea colgando de su padre, no como tabla suelta', () => {
+  const source = new Schema('ventas');
+  source.addTable('facturas', 'RANGE (fecha)');
+  source.addColumn('facturas', 'fecha', col(1, 'date', true));
+  source.addPartition('facturas_2026', 'facturas', "FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')");
+
+  const result = compare({ source, target: new Schema('ventas') });
+  assert.equal(result.sqlById['part_add:facturas_2026'],
+    'CREATE TABLE "facturas_2026" PARTITION OF "facturas" '
+    + "FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');");
+
+  const fila = result.rows.find((r) => r.id === 'part_add:facturas_2026');
+  assert.equal(fila.type, 'Partición');
+  assert.equal(fila.table, 'facturas');    // se agrupa bajo su padre
+});
+
+test('la partición por defecto y la de lista salen con sus límites', () => {
+  const source = new Schema('ventas');
+  source.addTable('t', 'LIST (region)');
+  source.addColumn('t', 'region', col(1, 'text'));
+  source.addPartition('t_norte', 't', "FOR VALUES IN ('norte')");
+  source.addPartition('t_resto', 't', 'DEFAULT');
+
+  const result = compare({ source, target: new Schema('ventas') });
+  assert.match(result.sqlById['part_add:t_norte'], /FOR VALUES IN \('norte'\);$/);
+  assert.match(result.sqlById['part_add:t_resto'], /PARTITION OF "t" DEFAULT;$/);
+});
+
+test('la partición se crea después de su tabla, y la subpartición después de ella', () => {
+  const source = new Schema('ventas');
+  source.addTable('t', 'LIST (region)');
+  source.addColumn('t', 'region', col(1, 'text'));
+  source.addPartition('z_norte', 't', "FOR VALUES IN ('norte')", 'RANGE (fecha)');
+  source.addPartition('a_norte_2026', 'z_norte', "FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')");
+
+  // Alfabéticamente a_norte_2026 iría primero; debe ir detrás de su padre.
+  assert.deepEqual(Object.keys(compare({ source, target: new Schema('ventas') }).sqlById),
+    ['tbl_add:t', 'part_add:z_norte', 'part_add:a_norte_2026']);
+});
+
+test('una subpartición lleva su propio PARTITION BY', () => {
+  const source = new Schema('ventas');
+  source.addTable('t', 'LIST (region)');
+  source.addPartition('t_norte', 't', "FOR VALUES IN ('norte')", 'RANGE (fecha)');
+
+  assert.equal(compare({ source, target: new Schema('ventas') }).sqlById['part_add:t_norte'],
+    'CREATE TABLE "t_norte" PARTITION OF "t" FOR VALUES IN (\'norte\')\n'
+    + '    PARTITION BY RANGE (fecha);');
+});
+
+test('cambiar los límites suelta la partición y la vuelve a enganchar', () => {
+  const source = new Schema('ventas');
+  source.addTable('t', 'RANGE (fecha)');
+  source.addPartition('p', 't', "FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')");
+  const target = new Schema('ventas');
+  target.addTable('t', 'RANGE (fecha)');
+  target.addPartition('p', 't', "FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')");
+
+  const result = compare({ source, target });
+  assert.equal(result.sqlById['part_alter:p'],
+    'ALTER TABLE "t" DETACH PARTITION "p";\n'
+    + 'ALTER TABLE "t" ATTACH PARTITION "p" '
+    + "FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');");
+  assert.equal(result.rows[0].destructive, false);   // DETACH no pierde datos
+});
+
+test('una partición igual no genera diferencia y la que sobra va comentada', () => {
+  const source = new Schema('ventas');
+  source.addTable('t', 'LIST (region)');
+  source.addPartition('igual', 't', "FOR VALUES IN ('a')");
+  const target = new Schema('ventas');
+  target.addTable('t', 'LIST (region)');
+  target.addPartition('igual', 't', "FOR VALUES IN ('a')");
+  target.addPartition('sobra', 't', "FOR VALUES IN ('b')");
+
+  const result = compare({ source, target });
+  assert.equal(result.totalChanges, 1);
+  assert.equal(result.sqlById['part_drop:sobra'], '-- DROP TABLE "sobra";');
+  assert.equal(result.rows[0].destructive, true);
+});

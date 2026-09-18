@@ -57,6 +57,27 @@ class Schema {
     this.functions = new Map();
     /** @type {Map<string, {table:string, name:string, definition:string}>} */
     this.triggers = new Map();
+    /** Clave de partición de las tablas que la tienen: "RANGE (fecha)". */
+    /** @type {Map<string, string>} */
+    this.partitionKeys = new Map();
+    /**
+     * Particiones. No son tablas sueltas: heredan columnas, índices y
+     * constraints de su padre, así que se comparan aparte y solo por sus
+     * límites.
+     * @type {Map<string, {name:string, parent:string, bounds:string,
+     *   partitionBy:?string}>}
+     */
+    this.partitions = new Map();
+  }
+
+  /** Declara una tabla (con su clave de partición, si la tiene). */
+  addTable(name, partitionBy = null) {
+    if (!this.tables.has(name)) this.tables.set(name, new Map());
+    if (partitionBy) this.partitionKeys.set(name, partitionBy);
+  }
+
+  addPartition(name, parent, bounds, partitionBy = null) {
+    this.partitions.set(name, { name, parent, bounds, partitionBy });
   }
 
   addColumn(table, column, info) {

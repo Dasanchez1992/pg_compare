@@ -14,6 +14,35 @@ const { Schema } = require('./schema');
 const CONNECT_TIMEOUT_MS = 10000;
 const QUERY_TIMEOUT_MS = 120000;
 
+// Una partición no es una tabla suelta: sus columnas, índices y constraints
+// vienen del padre. Por eso `NOT relispartition` en todas las consultas de
+// tablas, y las particiones se leen aparte por sus límites.
+const TABLES_SQL = `
+SELECT c.relname                  AS name,
+       pg_get_partkeydef(c.oid)   AS partition_by
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1
+  AND c.relkind IN ('r', 'p')
+  AND NOT c.relispartition
+ORDER BY c.relname;
+`;
+
+const PARTITIONS_SQL = `
+SELECT c.relname                                AS name,
+       parent.relname                           AS parent,
+       pg_get_expr(c.relpartbound, c.oid)       AS bounds,
+       pg_get_partkeydef(c.oid)                 AS partition_by
+FROM pg_class c
+JOIN pg_namespace n     ON n.oid = c.relnamespace
+JOIN pg_inherits i      ON i.inhrelid = c.oid
+JOIN pg_class parent    ON parent.oid = i.inhparent
+WHERE n.nspname = $1
+  AND c.relispartition
+  AND c.relkind IN ('r', 'p')   -- los índices particionados también heredan
+ORDER BY c.relname;
+`;
+
 const COLUMNS_SQL = `
 SELECT c.relname                                   AS table_name,
        a.attname                                   AS column_name,
@@ -27,7 +56,8 @@ JOIN pg_class c      ON c.oid = a.attrelid
 JOIN pg_namespace n  ON n.oid = c.relnamespace
 LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
 WHERE n.nspname = $1
-  AND c.relkind = 'r'
+  AND c.relkind IN ('r', 'p')
+  AND NOT c.relispartition
   AND a.attnum > 0
   AND NOT a.attisdropped
 ORDER BY c.relname, a.attnum;
@@ -44,7 +74,8 @@ JOIN pg_class c      ON c.oid = x.indrelid
 JOIN pg_class i      ON i.oid = x.indexrelid
 JOIN pg_namespace n  ON n.oid = c.relnamespace
 WHERE n.nspname = $1
-  AND c.relkind = 'r'
+  AND c.relkind IN ('r', 'p')
+  AND NOT c.relispartition
   AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.oid)
 ORDER BY c.relname, i.relname;
 `;
@@ -65,7 +96,8 @@ JOIN pg_namespace n       ON n.oid = c.relnamespace
 LEFT JOIN pg_class fc     ON fc.oid = con.confrelid
 LEFT JOIN pg_namespace fn ON fn.oid = fc.relnamespace
 WHERE n.nspname = $1
-  AND c.relkind = 'r'
+  AND c.relkind IN ('r', 'p')
+  AND NOT c.relispartition
 ORDER BY c.relname, con.conname;
 `;
 
@@ -148,6 +180,7 @@ JOIN pg_namespace n  ON n.oid = c.relnamespace
 WHERE n.nspname = $1
   AND NOT t.tgisinternal
   AND c.relkind IN ('r', 'p')
+  AND NOT c.relispartition
 ORDER BY c.relname, t.tgname;
 `;
 
@@ -202,6 +235,16 @@ async function introspect(conn) {
   return withClient(conn, async (client) => {
     const schema = new Schema(schemaName);
 
+    const tables = await client.query(TABLES_SQL, [schemaName]);
+    for (const row of tables.rows) {
+      schema.addTable(row.name, row.partition_by);
+    }
+
+    const partitions = await client.query(PARTITIONS_SQL, [schemaName]);
+    for (const row of partitions.rows) {
+      schema.addPartition(row.name, row.parent, row.bounds, row.partition_by);
+    }
+
     const columns = await client.query(COLUMNS_SQL, [schemaName]);
     for (const row of columns.rows) {
       schema.addColumn(row.table_name, row.column_name, {
@@ -215,7 +258,12 @@ async function introspect(conn) {
 
     const indexes = await client.query(INDEXES_SQL, [schemaName]);
     for (const row of indexes.rows) {
-      schema.addIndex(row.table_name, row.index_name, row.index_def);
+      // pg_get_indexdef devuelve "ON ONLY tabla" para los índices de una tabla
+      // particionada. Ejecutado tal cual crearía el índice solo en el padre y
+      // marcado como no válido; sin ONLY se propaga a todas las particiones,
+      // que es el estado que tiene la base de referencia.
+      schema.addIndex(row.table_name, row.index_name,
+        String(row.index_def).replace(/ ON ONLY /, ' ON '));
     }
 
     const constraints = await client.query(CONSTRAINTS_SQL, [schemaName]);

@@ -17,7 +17,11 @@ avisarte de versiones nuevas: nada más, y nada de tus datos sale del equipo.
 - **Índices** (nuevos, faltantes y con definición diferente)
 - **Constraints** (PRIMARY KEY, FOREIGN KEY, UNIQUE, CHECK, EXCLUSION),
   incluyendo los que existen en ambas bases pero con definición distinta
-- **Tablas** completas que existen en una y no en otra
+- **Tablas** completas que existen en una y no en otra, incluidas las
+  **particionadas**: la tabla padre se crea con su `PARTITION BY` y cada
+  partición cuelga de ella con sus límites (`FOR VALUES`, `DEFAULT`), incluso
+  si están subparticionadas. Cambiar los límites de una partición se resuelve
+  soltándola y volviéndola a enganchar, que no pierde datos
 - **Vistas**: nuevas, sobrantes y con definición distinta. Las que cambian se
   actualizan con `CREATE OR REPLACE VIEW`, que no borra nada ni pierde los
   permisos; si cambió la lista de columnas PostgreSQL lo rechaza y, como el
@@ -39,10 +43,11 @@ Además puedes **guardar N conexiones** y seleccionarlas para comparar.
 ### Qué no compara todavía
 
 Conviene saberlo antes de confiar en un "no hay diferencias": **vistas
-materializadas, tipos y dominios, extensiones y permisos** no se comparan. Las
-**tablas particionadas** tampoco: la tabla padre se ignora y sus particiones se
-ven como tablas sueltas, así que el script que saldría para ellas no es
-correcto. Si tu esquema las usa, revisa esa parte a mano.
+materializadas, tipos y dominios, extensiones y permisos** no se comparan.
+
+De las particiones se comparan sus límites, no sus objetos propios: columnas,
+índices y constraints se heredan del padre, así que se comparan ahí. Si le has
+añadido a una partición un índice suyo, ese no se ve.
 
 Otra cosa a tener en cuenta: si las dos conexiones apuntan a esquemas con
 **nombres distintos** (por ejemplo `public` contra `ventas`), las definiciones
@@ -65,6 +70,9 @@ no implican pérdida de datos.
 El script va envuelto en `BEGIN; ... COMMIT;` y fija
 `SET LOCAL search_path` al esquema de BD1, así las sentencias aplican
 sobre el esquema correcto aunque no sea `public`.
+
+Las particiones se emiten detrás de su tabla padre, y una subpartición detrás
+de la suya.
 
 El orden del script respeta las dependencias: secuencias y funciones primero
 (una columna puede tener `DEFAULT nextval(...)` o llamar a una función), luego

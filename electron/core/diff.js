@@ -46,6 +46,10 @@ const GROUP_ORDER = [
   'functions_alter',
   'tables_create',
   'tables_drop',
+  // Las particiones, detrás de la tabla de la que cuelgan.
+  'partitions_create',
+  'partitions_alter',
+  'partitions_drop',
   'columns_add',
   'columns_alter',
   'columns_drop',
@@ -70,6 +74,7 @@ const GROUP_ORDER = [
 const DESTRUCTIVE_GROUPS = new Set([
   'tables_drop', 'columns_drop', 'indexes_drop', 'constraints_drop',
   'views_drop', 'sequences_drop', 'functions_drop', 'triggers_drop',
+  'partitions_drop',
 ]);
 
 // Metadatos por grupo para la grilla: [tipo, estado, clase del badge].
@@ -94,6 +99,9 @@ const GROUP_META = {
   functions_create: ['Función', 'Nuevo', 'b-add'],
   functions_alter: ['Función', 'Diferente', 'b-chg'],
   functions_drop: ['Función', 'Sobra', 'b-del'],
+  partitions_create: ['Partición', 'Nuevo', 'b-add'],
+  partitions_alter: ['Partición', 'Diferente', 'b-chg'],
+  partitions_drop: ['Partición', 'Sobra', 'b-del'],
   triggers_create: ['Trigger', 'Nuevo', 'b-add'],
   triggers_alter: ['Trigger', 'Diferente', 'b-chg'],
   triggers_drop: ['Trigger', 'Sobra', 'b-del'],
@@ -185,7 +193,9 @@ function createTableSql(table, source, deferred = new Set()) {
     lines.push(`\tCONSTRAINT ${q(con.name)} ${con.def}`);
   }
 
-  let sql = `CREATE TABLE ${q(table)} (\n${lines.join(',\n')}\n);`;
+  const partitionBy = source.partitionKeys.get(table);
+  let sql = `CREATE TABLE ${q(table)} (\n${lines.join(',\n')}\n)`
+    + `${partitionBy ? `\nPARTITION BY ${partitionBy}` : ''};`;
 
   // Índices que no respaldan constraints.
   const indexes = itemsOfTable(source.indexes, table)
@@ -412,8 +422,11 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
     const nCols = source.columns(table).size;
     const nCons = itemsOfTable(source.constraints, table).length;
     const nIdx = itemsOfTable(source.indexes, table).length;
+    const particionada = source.partitionKeys.has(table)
+      ? `particionada por ${source.partitionKeys.get(table)} · ` : '';
     add('tables_create', `tbl_add:${table}`, table, table,
-      `${nCols} columnas, ${nCons} constraints, ${nIdx} índices · solo existe en ${db2Name}`,
+      `${particionada}${nCols} columnas, ${nCons} constraints, ${nIdx} índices `
+      + `· solo existe en ${db2Name}`,
       createTableSql(table, source, deferred));
   }
 
@@ -421,6 +434,49 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
   for (const table of onlyTarget) {
     add('tables_drop', `tbl_drop:${table}`, table, table,
       `solo existe en ${db1Name}`, `-- DROP TABLE ${q(table)};`);
+  }
+
+  // --- Particiones ----------------------------------------------------
+  const srcPartitions = source.partitions;
+  const tgtPartitions = target.partitions;
+
+  /** Una partición se crea después de la tabla de la que cuelga. */
+  const orderPartitions = (names, schema) => {
+    const within = new Set(names);
+    const dependencies = new Map(names.map((name) => {
+      const parent = schema.partitions.get(name).parent;
+      return [name, new Map(within.has(parent) ? [[parent, true]] : [])];
+    }));
+    return topologicalOrder(names, dependencies, (stuck, deps) => deps.get(stuck[0]).clear());
+  };
+
+  const newPartitions = [...srcPartitions.keys()]
+    .filter((name) => !tgtPartitions.has(name)).sort(byText);
+
+  for (const name of orderPartitions(newPartitions, source)) {
+    const part = srcPartitions.get(name);
+    add('partitions_create', `part_add:${name}`, part.parent, name,
+      `${part.bounds} · solo existe en ${db2Name}`,
+      `CREATE TABLE ${q(name)} PARTITION OF ${q(part.parent)} ${part.bounds}`
+      + `${part.partitionBy ? `\n    PARTITION BY ${part.partitionBy}` : ''};`);
+  }
+
+  for (const [name, part] of [...srcPartitions].sort(([a], [b]) => byText(a, b))) {
+    const current = tgtPartitions.get(name);
+    if (!current) continue;
+    if (current.bounds === part.bounds && current.parent === part.parent) continue;
+    // Los límites de una partición no se alteran: hay que soltarla y volver a
+    // engancharla. DETACH no borra datos, la tabla sigue existiendo suelta.
+    add('partitions_alter', `part_alter:${name}`, part.parent, name,
+      `límites: ${current.bounds} → ${part.bounds}`,
+      `ALTER TABLE ${q(current.parent)} DETACH PARTITION ${q(name)};\n`
+      + `ALTER TABLE ${q(part.parent)} ATTACH PARTITION ${q(name)} ${part.bounds};`);
+  }
+
+  for (const [name, part] of [...tgtPartitions].sort(([a], [b]) => byText(a, b))) {
+    if (srcPartitions.has(name)) continue;
+    add('partitions_drop', `part_drop:${name}`, part.parent, name,
+      `${part.bounds} · solo existe en ${db1Name}`, `-- DROP TABLE ${q(name)};`);
   }
 
   // --- Columnas (solo en las tablas que existen en ambas) ------------
