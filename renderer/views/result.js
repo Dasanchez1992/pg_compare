@@ -58,8 +58,10 @@
         <div class="card">
           <div class="toolbar">
             <strong>Objetos</strong>
-            <span class="muted" id="visible-count"></span>
+            <span class="muted" id="selection-count"></span>
             <span class="spacer"></span>
+            <button type="button" class="btn secondary" id="only-filtered" hidden>
+              Marcar solo lo filtrado</button>
             <button type="button" class="btn secondary" id="check-all">Marcar todo</button>
             <button type="button" class="btn secondary" id="uncheck-all">Desmarcar todo</button>
             <button type="button" class="btn secondary" id="show-script"
@@ -67,11 +69,18 @@
             <button type="button" class="btn" id="generate">⚙ Generar script</button>
           </div>
 
+          <p class="notice" id="hidden-selected" hidden>
+            <span id="hidden-selected-text"></span>
+            <button type="button" class="btn secondary sm" id="uncheck-hidden">
+              Desmarcar los ocultos</button>
+          </p>
+
           <div class="grid-wrap">
             <table class="grid" id="grid">
               <thead>
                 <tr>
-                  <th style="width:2rem;"><input type="checkbox" id="check-header"></th>
+                  <th style="width:2rem;"><input type="checkbox" id="check-header"
+                      title="Marca o desmarca las filas que se ven ahora"></th>
                   <th>Nombre</th><th>Tipo</th><th>Estado</th>
                   <th>Tabla / Esquema</th><th>Detalle</th>
                 </tr>
@@ -151,18 +160,78 @@
         let hasScript = run.hasScript;
 
         // --- Selección de filas ---------------------------------------
-        const visibleRows = () => rowsEls.filter((tr) => tr.style.display !== 'none');
+        // El script se arma con lo marcado, no con lo que se ve: por eso la
+        // cuenta de marcados está siempre a la vista y, si el filtro esconde
+        // filas marcadas, se avisa en vez de colarlas sin más en el script.
+        const boxOf = (tr) => $('input[type=checkbox]', tr);
+        const isVisible = (tr) => tr.style.display !== 'none';
+        const visibleRows = () => rowsEls.filter(isVisible);
+        const checkedRows = () => rowsEls.filter((tr) => boxOf(tr).checked);
 
-        const setAll = (state) => {
-          for (const tr of visibleRows()) {
-            $('input[type=checkbox]', tr).checked = state;
-          }
-          $('#check-header', root).checked = state;
+        const setChecked = (rows, state) => {
+          for (const tr of rows) boxOf(tr).checked = state;
+          refreshSelection();
         };
 
-        $('#check-all', root).addEventListener('click', () => setAll(true));
-        $('#uncheck-all', root).addEventListener('click', () => setAll(false));
-        $('#check-header', root).addEventListener('click', (e) => setAll(e.currentTarget.checked));
+        const filterEls = ['f-name', 'f-table', 'f-type', 'f-status']
+          .map((id) => $(`#${id}`, root));
+        const filtering = () => filterEls.some((el) => el.value !== '');
+
+        function refreshSelection() {
+          const total = rowsEls.length;
+          const visibles = visibleRows();
+          const marcadas = checkedRows().length;
+          const marcadasVisibles = visibles.filter((tr) => boxOf(tr).checked).length;
+          const ocultasMarcadas = marcadas - marcadasVisibles;
+          const conFiltro = filtering();
+
+          $('#selection-count', root).textContent = conFiltro
+            ? `${marcadas} de ${total} marcados · ${visibles.length} a la vista`
+            : `${marcadas} de ${total} marcados`;
+
+          const generar = $('#generate', root);
+          generar.textContent = `⚙ Generar script (${marcadas})`;
+          generar.disabled = marcadas === 0;
+          generar.title = marcadas === 0 ? 'Marca al menos un cambio.' : '';
+
+          const cabecera = $('#check-header', root);
+          cabecera.checked = visibles.length > 0 && marcadasVisibles === visibles.length;
+          cabecera.indeterminate = marcadasVisibles > 0 && marcadasVisibles < visibles.length;
+
+          $('#only-filtered', root).hidden = !conFiltro;
+
+          const aviso = $('#hidden-selected', root);
+          aviso.hidden = ocultasMarcadas === 0;
+          if (ocultasMarcadas > 0) {
+            $('#hidden-selected-text', root).textContent = ocultasMarcadas === 1
+              ? '⚠ Hay 1 cambio marcado que el filtro no muestra; también entra en el script.'
+              : `⚠ Hay ${ocultasMarcadas} cambios marcados que el filtro no muestra; `
+                + 'también entran en el script.';
+          }
+        }
+
+        // "Marcar todo" y "Desmarcar todo" son literales: alcanzan a todas las
+        // filas, las oculte o no el filtro.
+        $('#check-all', root).addEventListener('click', () => setChecked(rowsEls, true));
+        $('#uncheck-all', root).addEventListener('click', () => setChecked(rowsEls, false));
+
+        // Para quedarse justo con lo filtrado (por ejemplo, una sola tabla).
+        $('#only-filtered', root).addEventListener('click', () => {
+          for (const tr of rowsEls) boxOf(tr).checked = isVisible(tr);
+          refreshSelection();
+        });
+
+        $('#uncheck-hidden', root).addEventListener('click', () => {
+          for (const tr of rowsEls) if (!isVisible(tr)) boxOf(tr).checked = false;
+          refreshSelection();
+        });
+
+        // La casilla de la cabecera actúa sobre lo que se está viendo.
+        $('#check-header', root).addEventListener('click', (e) => {
+          setChecked(visibleRows(), e.currentTarget.checked);
+        });
+
+        grid.addEventListener('change', refreshSelection);
 
         // --- SQL de la fila seleccionada -------------------------------
         const showSql = (tr) => {
@@ -188,7 +257,6 @@
           const table = $('#f-table', root).value.toLowerCase();
           const type = $('#f-type', root).value;
           const status = $('#f-status', root).value;
-          let visible = 0;
 
           for (const tr of rowsEls) {
             const ok = (!name || tr.dataset.name.includes(name))
@@ -196,14 +264,11 @@
               && (!type || tr.dataset.type === type)
               && (!status || tr.dataset.status === status);
             tr.style.display = ok ? '' : 'none';
-            if (ok) visible += 1;
           }
-          $('#visible-count', root).textContent = `${visible} objeto(s)`;
+          refreshSelection();
         };
 
-        for (const id of ['f-name', 'f-table', 'f-type', 'f-status']) {
-          $(`#${id}`, root).addEventListener('input', applyFilters);
-        }
+        for (const el of filterEls) el.addEventListener('input', applyFilters);
         applyFilters();
 
         // --- Modal del script -------------------------------------------
@@ -213,6 +278,10 @@
           modal.classList.add('open');
         };
         const closeModal = () => modal.classList.remove('open');
+        const setScriptTitle = (n) => {
+          $('#script-title', root).textContent =
+            `Script ALTER completo (${n} cambio${n === 1 ? '' : 's'})`;
+        };
 
         $('#show-script', root).addEventListener('click', openModal);
         $('#modal-close', root).addEventListener('click', closeModal);
@@ -227,9 +296,11 @@
         // --- Generar el script ------------------------------------------
         $('#generate', root).addEventListener('click', async (event) => {
           const button = event.currentTarget;
-          const selectedIds = rowsEls
-            .filter((tr) => $('input[type=checkbox]', tr).checked)
-            .map((tr) => tr.dataset.id);
+          const selectedIds = checkedRows().map((tr) => tr.dataset.id);
+          if (selectedIds.length === 0) {
+            notify('Marca al menos un cambio para generar el script.', 'error');
+            return;
+          }
 
           button.disabled = true;
           try {
@@ -238,13 +309,12 @@
             hasScript = true;
             run.hasScript = true;
             $('#show-script', root).hidden = false;
-            $('#script-title', root).textContent =
-              `Script ALTER completo (${selectedIds.length} cambio${selectedIds.length === 1 ? '' : 's'})`;
+            setScriptTitle(selectedIds.length);
             openModal();
           } catch (error) {
             notify(error.message, 'error');
           } finally {
-            button.disabled = false;
+            refreshSelection();
           }
         });
 
@@ -269,10 +339,7 @@
 
         // Si se vuelve a abrir una comparación con script, se muestra al pulsar
         // "Generar script"; el contenido ya está cargado desde el historial.
-        if (hasScript) {
-          $('#script-title', root).textContent =
-            `Script ALTER completo (${run.selectedIds.length} cambio${run.selectedIds.length === 1 ? '' : 's'})`;
-        }
+        if (hasScript) setScriptTitle(run.selectedIds.length);
       },
     };
   });
