@@ -14,6 +14,61 @@ const { Schema } = require('./schema');
 const CONNECT_TIMEOUT_MS = 10000;
 const QUERY_TIMEOUT_MS = 120000;
 
+// Tipos del usuario: enum ('e'), dominios ('d') y compuestos ('c'). Se dejan
+// fuera los tipos fila implícitos de cada tabla y los array, que PostgreSQL
+// crea solo. Los RANGE ('r') no se comparan: su CREATE no se puede reconstruir
+// desde el catálogo sin rearmarlo a mano.
+const TYPES_SQL = `
+SELECT t.typname                                   AS name,
+       t.typtype::text                             AS kind,
+       format_type(t.typbasetype, t.typtypmod)     AS base_type,
+       bt.typname                                  AS base_name,
+       bn.nspname                                  AS base_schema,
+       t.typnotnull                                AS not_null,
+       t.typdefault                                AS default_value,
+       (SELECT array_agg(e.enumlabel::text ORDER BY e.enumsortorder)
+        FROM pg_enum e WHERE e.enumtypid = t.oid)  AS enum_values
+FROM pg_type t
+JOIN pg_namespace n        ON n.oid = t.typnamespace
+LEFT JOIN pg_type bt       ON bt.oid = t.typbasetype
+LEFT JOIN pg_namespace bn  ON bn.oid = bt.typnamespace
+WHERE n.nspname = $1
+  AND t.typtype IN ('e', 'd', 'c')
+  AND (t.typrelid = 0
+       OR (SELECT c.relkind FROM pg_class c WHERE c.oid = t.typrelid) = 'c')
+ORDER BY t.typname;
+`;
+
+const DOMAIN_CHECKS_SQL = `
+SELECT t.typname                     AS type_name,
+       c.conname                     AS name,
+       pg_get_constraintdef(c.oid)   AS definition
+FROM pg_constraint c
+JOIN pg_type t      ON t.oid = c.contypid
+JOIN pg_namespace n ON n.oid = t.typnamespace
+WHERE n.nspname = $1
+ORDER BY t.typname, c.conname;
+`;
+
+const COMPOSITE_ATTRS_SQL = `
+SELECT t.typname                                AS type_name,
+       a.attname                                AS name,
+       a.attnum                                 AS ordinal,
+       format_type(a.atttypid, a.atttypmod)     AS data_type,
+       at.typname                               AS attr_type,
+       an.nspname                               AS attr_schema
+FROM pg_type t
+JOIN pg_class c      ON c.oid = t.typrelid AND c.relkind = 'c'
+JOIN pg_attribute a  ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+JOIN pg_namespace n  ON n.oid = t.typnamespace
+JOIN pg_type at      ON at.oid = a.atttypid
+JOIN pg_namespace an ON an.oid = at.typnamespace
+WHERE n.nspname = $1
+ORDER BY t.typname, a.attnum;
+`;
+
+const TYPE_KIND = { e: 'enum', d: 'domain', c: 'composite' };
+
 // Una partición no es una tabla suelta: sus columnas, índices y constraints
 // vienen del padre. Por eso `NOT relispartition` en todas las consultas de
 // tablas, y las particiones se leen aparte por sus límites.
@@ -234,6 +289,42 @@ async function introspect(conn) {
   const schemaName = conn.schema || 'public';
   return withClient(conn, async (client) => {
     const schema = new Schema(schemaName);
+
+    const types = await client.query(TYPES_SQL, [schemaName]);
+    for (const row of types.rows) {
+      const kind = TYPE_KIND[row.kind];
+      schema.addType(row.name, {
+        kind,
+        values: row.enum_values || [],
+        baseType: row.base_type,
+        notNull: row.not_null,
+        default: row.default_value,
+        checks: [],
+        attributes: [],
+      });
+      // Un dominio sobre otro tipo del esquema hay que crearlo después de él.
+      if (kind === 'domain' && row.base_schema === schemaName) {
+        schema.types.get(row.name).dependsOn.add(row.base_name);
+      }
+    }
+
+    const domainChecks = await client.query(DOMAIN_CHECKS_SQL, [schemaName]);
+    for (const row of domainChecks.rows) {
+      const type = schema.types.get(row.type_name);
+      if (type) type.checks.push({ name: row.name, definition: row.definition });
+    }
+
+    const attrs = await client.query(COMPOSITE_ATTRS_SQL, [schemaName]);
+    for (const row of attrs.rows) {
+      const type = schema.types.get(row.type_name);
+      if (!type) continue;
+      type.attributes.push({
+        name: row.name, ordinal: row.ordinal, dataType: row.data_type,
+      });
+      if (row.attr_schema === schemaName && schema.types.has(row.attr_type)) {
+        type.dependsOn.add(row.attr_type);
+      }
+    }
 
     const tables = await client.query(TABLES_SQL, [schemaName]);
     for (const row of tables.rows) {

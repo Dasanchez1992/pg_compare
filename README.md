@@ -33,6 +33,11 @@ avisarte de versiones nuevas: nada más, y nada de tus datos sale del equipo.
 - **Funciones y procedimientos**, incluidas las sobrecargas: cada firma
   (`saludo(text)` y `saludo(integer)`) se compara por separado. Las que cambian
   se reemplazan con `CREATE OR REPLACE`
+- **Tipos del usuario**: enum, dominios y tipos compuestos. De un enum se
+  añaden los valores que falten, en su sitio (`ADD VALUE ... BEFORE`); de un
+  dominio se ajustan `NOT NULL`, el `DEFAULT` y sus `CHECK`; de un compuesto,
+  sus campos. Se crean antes que nada, y un dominio sobre otro tipo del esquema
+  va detrás de aquel
 - **Triggers** de usuario: nuevos, sobrantes y con definición distinta. Los que
   cambian se recrean con `DROP` + `CREATE`, porque `CREATE OR REPLACE TRIGGER`
   no existe antes de PostgreSQL 14. Los triggers internos que PostgreSQL crea
@@ -43,7 +48,12 @@ Además puedes **guardar N conexiones** y seleccionarlas para comparar.
 ### Qué no compara todavía
 
 Conviene saberlo antes de confiar en un "no hay diferencias": **vistas
-materializadas, tipos y dominios, extensiones y permisos** no se comparan.
+materializadas, tipos RANGE, extensiones y permisos** no se comparan.
+
+Algunas diferencias PostgreSQL no permite resolverlas con un `ALTER`: quitarle
+un valor a un enum, cambiar el tipo base de un dominio o convertir un tipo en
+otra clase. Esas salen marcadas como **Manual** y su "SQL" es la explicación de
+qué habría que hacer; el script no las aplica.
 
 De las particiones se comparan sus límites, no sus objetos propios: columnas,
 índices y constraints se heredan del padre, así que se comparan ahí. Si le has
@@ -74,7 +84,8 @@ sobre el esquema correcto aunque no sea `public`.
 Las particiones se emiten detrás de su tabla padre, y una subpartición detrás
 de la suya.
 
-El orden del script respeta las dependencias: secuencias y funciones primero
+El orden del script respeta las dependencias: los tipos del usuario primero de
+todo, luego secuencias y funciones
 (una columna puede tener `DEFAULT nextval(...)` o llamar a una función), luego
 las tablas con sus índices y constraints, después los triggers —que necesitan su
 tabla y su función— y al final las vistas; entre vistas, la que lee de otra va

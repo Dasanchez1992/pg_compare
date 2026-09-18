@@ -86,12 +86,14 @@
                       <option>Vista</option><option>Secuencia</option>
                       <option>Función</option><option>Trigger</option>
                       <option>Partición</option>
+                      <option>Tipo</option><option>Dominio</option>
                     </select>
                   </th>
                   <th>
                     <select id="f-status">
                       <option value="">(todos)</option>
-                      <option>Nuevo</option><option>Diferente</option><option>Sobra</option>
+                      <option>Nuevo</option><option>Diferente</option>
+                      <option>Sobra</option><option>Manual</option>
                     </select>
                   </th>
                   <th><input type="text" id="f-table" placeholder="Filtrar por tabla..."></th>

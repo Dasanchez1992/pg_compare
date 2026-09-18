@@ -753,3 +753,169 @@ test('una partición igual no genera diferencia y la que sobra va comentada', ()
   assert.equal(result.sqlById['part_drop:sobra'], '-- DROP TABLE "sobra";');
   assert.equal(result.rows[0].destructive, true);
 });
+
+// --- Tipos del usuario: enum, dominios y compuestos ------------------------
+
+const enumTipo = (values) => ({ kind: 'enum', values, checks: [], attributes: [] });
+const dominio = (extra = {}) => ({
+  kind: 'domain', baseType: 'text', notNull: false, default: null,
+  checks: [], attributes: [], values: [], ...extra,
+});
+const compuesto = (attributes) => ({
+  kind: 'composite', attributes, checks: [], values: [],
+});
+
+test('un enum nuevo se crea con sus valores en orden', () => {
+  const source = new Schema('ventas');
+  source.addType('estado', enumTipo(['nuevo', 'enviado']));
+
+  const result = compare({ source, target: new Schema('ventas'), db2Name: 'prod' });
+  assert.equal(result.sqlById['type_add:estado'],
+    'CREATE TYPE "estado" AS ENUM (\n    \'nuevo\',\n    \'enviado\'\n);');
+  assert.equal(result.rows[0].type, 'Tipo');
+  assert.equal(result.rows[0].detail, 'enum (2 valores) · solo existe en prod');
+});
+
+test('un dominio nuevo lleva su base, default, NOT NULL y checks', () => {
+  const source = new Schema('ventas');
+  source.addType('email', dominio({
+    notNull: true,
+    default: "'sin@correo'::text",
+    checks: [{ name: 'email_check', definition: "CHECK ((VALUE ~ '@'::text))" }],
+  }));
+
+  const result = compare({ source, target: new Schema('ventas') });
+  assert.equal(result.sqlById['type_add:email'], [
+    'CREATE DOMAIN "email" AS text',
+    "    DEFAULT 'sin@correo'::text",
+    '    NOT NULL',
+    '    CONSTRAINT "email_check" CHECK ((VALUE ~ \'@\'::text));',
+  ].join('\n'));
+  assert.equal(result.rows[0].type, 'Dominio');
+});
+
+test('un tipo compuesto nuevo lleva sus campos', () => {
+  const source = new Schema('ventas');
+  source.addType('direccion', compuesto([
+    { name: 'calle', ordinal: 1, dataType: 'text' },
+    { name: 'numero', ordinal: 2, dataType: 'integer' },
+  ]));
+
+  assert.equal(compare({ source, target: new Schema('ventas') }).sqlById['type_add:direccion'],
+    'CREATE TYPE "direccion" AS (\n    "calle" text,\n    "numero" integer\n);');
+});
+
+test('el valor de enum que falta se inserta en su sitio, no al final', () => {
+  const source = new Schema('ventas');
+  source.addType('estado', enumTipo(['nuevo', 'en_curso', 'enviado', 'entregado']));
+  const target = new Schema('ventas');
+  target.addType('estado', enumTipo(['nuevo', 'enviado']));
+
+  const result = compare({ source, target });
+  assert.equal(result.sqlById["type_value:estado:en_curso"],
+    'ALTER TYPE "estado" ADD VALUE \'en_curso\' BEFORE \'enviado\';');
+  // El último no tiene ninguno posterior que exista: va al final.
+  assert.equal(result.sqlById["type_value:estado:entregado"],
+    'ALTER TYPE "estado" ADD VALUE \'entregado\';');
+});
+
+test('quitar un valor de un enum se marca como Manual, no se intenta', () => {
+  const source = new Schema('ventas');
+  source.addType('estado', enumTipo(['nuevo']));
+  const target = new Schema('ventas');
+  target.addType('estado', enumTipo(['nuevo', 'obsoleto']));
+
+  const result = compare({ source, target });
+  const fila = result.rows[0];
+  assert.equal(fila.status, 'Manual');
+  assert.equal(fila.manual, true);
+  // Todo el "SQL" es explicación: el script no aplica nada.
+  assert.ok(result.sqlById[fila.id].split('\n').every((l) => l.startsWith('--')));
+});
+
+test('cambiar el tipo base de un dominio también es Manual', () => {
+  const source = new Schema('ventas');
+  source.addType('d', dominio({ baseType: 'integer' }));
+  const target = new Schema('ventas');
+  target.addType('d', dominio({ baseType: 'text' }));
+
+  const fila = compare({ source, target }).rows[0];
+  assert.equal(fila.status, 'Manual');
+  assert.match(fila.detail, /no se puede alterar/);
+});
+
+test('del dominio se ajustan NOT NULL, default y checks', () => {
+  const source = new Schema('ventas');
+  source.addType('d', dominio({
+    notNull: true,
+    default: "'x'::text",
+    checks: [{ name: 'd_largo', definition: 'CHECK ((length(VALUE) > 3))' }],
+  }));
+  const target = new Schema('ventas');
+  target.addType('d', dominio({
+    checks: [
+      { name: 'd_largo', definition: 'CHECK ((length(VALUE) > 1))' },
+      { name: 'd_sobra', definition: "CHECK ((VALUE <> ''::text))" },
+    ],
+  }));
+
+  const result = compare({ source, target });
+  assert.equal(result.sqlById['type_null:d'], 'ALTER DOMAIN "d" SET NOT NULL;');
+  assert.equal(result.sqlById['type_default:d'], 'ALTER DOMAIN "d" SET DEFAULT \'x\'::text;');
+  // El check que cambia se recrea; el que sobra va comentado.
+  assert.equal(result.sqlById['type_check:d:d_largo'],
+    'ALTER DOMAIN "d" DROP CONSTRAINT "d_largo";\n'
+    + 'ALTER DOMAIN "d" ADD CONSTRAINT "d_largo" CHECK ((length(VALUE) > 3));');
+  assert.equal(result.sqlById['type_check_drop:d:d_sobra'],
+    '-- ALTER DOMAIN "d" DROP CONSTRAINT "d_sobra";');
+});
+
+test('de un compuesto se añaden, alteran y comentan sus campos', () => {
+  const source = new Schema('ventas');
+  source.addType('d', compuesto([
+    { name: 'calle', ordinal: 1, dataType: 'text' },
+    { name: 'cp', ordinal: 2, dataType: 'text' },
+  ]));
+  const target = new Schema('ventas');
+  target.addType('d', compuesto([
+    { name: 'calle', ordinal: 1, dataType: 'character varying(50)' },
+    { name: 'sobra', ordinal: 2, dataType: 'boolean' },
+  ]));
+
+  const result = compare({ source, target });
+  assert.equal(result.sqlById['type_attr_type:d:calle'],
+    'ALTER TYPE "d" ALTER ATTRIBUTE "calle" TYPE text;');
+  assert.equal(result.sqlById['type_attr_add:d:cp'],
+    'ALTER TYPE "d" ADD ATTRIBUTE "cp" text;');
+  assert.equal(result.sqlById['type_attr_drop:d:sobra'],
+    '-- ALTER TYPE "d" DROP ATTRIBUTE "sobra";');
+});
+
+test('un dominio sobre otro tipo del esquema se crea después de él', () => {
+  const source = new Schema('ventas');
+  source.addType('z_enum', enumTipo(['a']));
+  source.addType('a_dominio', dominio({ baseType: 'z_enum' }));
+  source.types.get('a_dominio').dependsOn.add('z_enum');
+
+  assert.deepEqual(Object.keys(compare({ source, target: new Schema('ventas') }).sqlById),
+    ['type_add:z_enum', 'type_add:a_dominio']);
+});
+
+test('los tipos van antes que las tablas que los usan', () => {
+  const source = new Schema('ventas');
+  source.addType('estado', enumTipo(['nuevo']));
+  source.addColumn('pedidos', 'est', col(1, 'estado'));
+
+  assert.deepEqual(Object.keys(compare({ source, target: new Schema('ventas') }).sqlById),
+    ['type_add:estado', 'tbl_add:pedidos']);
+});
+
+test('el tipo que sobra se borra comentado, con DROP DOMAIN si es dominio', () => {
+  const target = new Schema('ventas');
+  target.addType('t', enumTipo(['a']));
+  target.addType('d', dominio());
+
+  const result = compare({ source: new Schema('ventas'), target });
+  assert.equal(result.sqlById['type_drop:t'], '-- DROP TYPE "t";');
+  assert.equal(result.sqlById['type_drop:d'], '-- DROP DOMAIN "d";');
+});
