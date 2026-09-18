@@ -40,6 +40,10 @@ const GROUP_ORDER = [
   // Las secuencias van primero: una columna puede tener DEFAULT nextval(...).
   'sequences_create',
   'sequences_alter',
+  // Las funciones, antes que las tablas: pueden usarse en un DEFAULT, en el
+  // índice de una expresión o dentro de una vista.
+  'functions_create',
+  'functions_alter',
   'tables_create',
   'tables_drop',
   'columns_add',
@@ -51,16 +55,21 @@ const GROUP_ORDER = [
   'constraints_add',
   'constraints_alter',
   'constraints_drop',
+  // Los triggers, cuando ya existen su tabla y su función.
+  'triggers_create',
+  'triggers_alter',
+  'triggers_drop',
   // Las vistas, al final: leen de las tablas que se acaban de crear o cambiar.
   'views_create',
   'views_alter',
   'views_drop',
+  'functions_drop',
   'sequences_drop',
 ];
 
 const DESTRUCTIVE_GROUPS = new Set([
   'tables_drop', 'columns_drop', 'indexes_drop', 'constraints_drop',
-  'views_drop', 'sequences_drop',
+  'views_drop', 'sequences_drop', 'functions_drop', 'triggers_drop',
 ]);
 
 // Metadatos por grupo para la grilla: [tipo, estado, clase del badge].
@@ -82,7 +91,16 @@ const GROUP_META = {
   sequences_create: ['Secuencia', 'Nuevo', 'b-add'],
   sequences_alter: ['Secuencia', 'Diferente', 'b-chg'],
   sequences_drop: ['Secuencia', 'Sobra', 'b-del'],
+  functions_create: ['Función', 'Nuevo', 'b-add'],
+  functions_alter: ['Función', 'Diferente', 'b-chg'],
+  functions_drop: ['Función', 'Sobra', 'b-del'],
+  triggers_create: ['Trigger', 'Nuevo', 'b-add'],
+  triggers_alter: ['Trigger', 'Diferente', 'b-chg'],
+  triggers_drop: ['Trigger', 'Sobra', 'b-del'],
 };
+
+/** "función" o "procedimiento", para los textos de la grilla. */
+const KIND_LABEL = { FUNCTION: 'función', PROCEDURE: 'procedimiento' };
 
 // Atributos de una secuencia: clave, etiqueta para el detalle y cómo se
 // escriben en SQL.
@@ -360,6 +378,35 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
       `solo existe en ${db1Name}`, `-- DROP SEQUENCE ${q(name)};`);
   }
 
+  // --- Funciones y procedimientos -------------------------------------
+  const srcFunctions = source.functions;
+  const tgtFunctions = target.functions;
+  const bySignature = ([a], [b]) => byText(a, b);
+
+  for (const [signature, fn] of [...srcFunctions].sort(bySignature)) {
+    if (tgtFunctions.has(signature)) continue;
+    // La definición del catálogo ya es un CREATE OR REPLACE completo.
+    add('functions_create', `fn_add:${signature}`, signature, signature,
+      `${KIND_LABEL[fn.kind]} · solo existe en ${db2Name}`, `${fn.definition};`);
+  }
+
+  for (const [signature, fn] of [...srcFunctions].sort(bySignature)) {
+    const current = tgtFunctions.get(signature);
+    if (!current || current.definition === fn.definition) continue;
+    // CREATE OR REPLACE conserva los permisos. Cambiar el tipo devuelto exige
+    // borrarla antes, y PostgreSQL lo dirá: el script va en una transacción.
+    add('functions_alter', `fn_alter:${signature}`, signature, signature,
+      `definición distinta (${lineCount(current.definition)} → ${lineCount(fn.definition)})`,
+      `${fn.definition};`);
+  }
+
+  for (const [signature, fn] of [...tgtFunctions].sort(bySignature)) {
+    if (srcFunctions.has(signature)) continue;
+    add('functions_drop', `fn_drop:${signature}`, signature, signature,
+      `${KIND_LABEL[fn.kind]} · solo existe en ${db1Name}`,
+      `-- DROP ${fn.kind} ${q(fn.name)}(${fn.args});`);
+  }
+
   // --- Tablas nuevas: CREATE TABLE completo --------------------------
   for (const table of newTablesOrdered) {
     const nCols = source.columns(table).size;
@@ -471,6 +518,26 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
       `-- ALTER TABLE ${q(con.table)} DROP CONSTRAINT ${q(con.name)};`);
   }
 
+  // --- Triggers -------------------------------------------------------
+  for (const trigger of missing(source.triggers, target.triggers)) {
+    add('triggers_create', `trg_add:${trigger.table}:${trigger.name}`,
+      trigger.table, trigger.name,
+      `${trigger.definition} · solo existe en ${db2Name}`, `${trigger.definition};`);
+  }
+  for (const [src, tgt] of shared(source.triggers, target.triggers)) {
+    if (src.definition === tgt.definition) continue;
+    // No hay CREATE OR REPLACE TRIGGER hasta PostgreSQL 14: se recrea.
+    add('triggers_alter', `trg_alter:${src.table}:${src.name}`, src.table, src.name,
+      `definición: ${tgt.definition} → ${src.definition}`,
+      `DROP TRIGGER ${q(src.name)} ON ${q(src.table)};\n${src.definition};`);
+  }
+  for (const trigger of missing(target.triggers, source.triggers)) {
+    add('triggers_drop', `trg_drop:${trigger.table}:${trigger.name}`,
+      trigger.table, trigger.name,
+      `${trigger.definition} · solo existe en ${db1Name}`,
+      `-- DROP TRIGGER ${q(trigger.name)} ON ${q(trigger.table)};`);
+  }
+
   // --- Vistas ---------------------------------------------------------
   const srcViews = source.views;
   const tgtViews = target.views;
@@ -544,6 +611,9 @@ function buildScript({ db1Name, db2Name, sqlById, selectedIds, schema = 'public'
     'BEGIN;',
     '',
     `SET LOCAL search_path TO ${q(schema)};`,
+    '-- Igual que pg_dump: sin esto, una función SQL que lea de una tabla que',
+    '-- el propio script crea después fallaría al validarse su cuerpo.',
+    'SET LOCAL check_function_bodies = false;',
     '',
   ];
 

@@ -48,6 +48,15 @@ class Schema {
      *   min:string, max:string, increment:string, cycle:boolean, cache:string}>}
      */
     this.sequences = new Map();
+    /**
+     * Funciones y procedimientos, con su firma en la clave: una misma función
+     * puede estar sobrecargada con distintos argumentos.
+     * @type {Map<string, {name:string, args:string, signature:string,
+     *   kind:string, definition:string}>}
+     */
+    this.functions = new Map();
+    /** @type {Map<string, {table:string, name:string, definition:string}>} */
+    this.triggers = new Map();
   }
 
   addColumn(table, column, info) {
@@ -78,6 +87,15 @@ class Schema {
 
   addSequence(name, info) {
     this.sequences.set(name, { name, ...info });
+  }
+
+  addFunction(name, args, info) {
+    const signature = `${name}(${args})`;
+    this.functions.set(signature, { name, args, signature, ...info });
+  }
+
+  addTrigger(table, name, definition) {
+    this.triggers.set(key(table, name), { table, name, definition });
   }
 
   /** Columnas de una tabla, o un mapa vacío si no existe. */

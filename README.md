@@ -26,17 +26,29 @@ avisarte de versiones nuevas: nada más, y nada de tus datos sale del equipo.
   atributos que cambiaron (tipo, incremento, mínimo, máximo, inicio, caché y
   ciclo). Las que respaldan un `serial` no se tocan: las crea PostgreSQL junto
   con su tabla
+- **Funciones y procedimientos**, incluidas las sobrecargas: cada firma
+  (`saludo(text)` y `saludo(integer)`) se compara por separado. Las que cambian
+  se reemplazan con `CREATE OR REPLACE`
+- **Triggers** de usuario: nuevos, sobrantes y con definición distinta. Los que
+  cambian se recrean con `DROP` + `CREATE`, porque `CREATE OR REPLACE TRIGGER`
+  no existe antes de PostgreSQL 14. Los triggers internos que PostgreSQL crea
+  para las claves foráneas no se tocan
 
 Además puedes **guardar N conexiones** y seleccionarlas para comparar.
 
 ### Qué no compara todavía
 
 Conviene saberlo antes de confiar en un "no hay diferencias": **vistas
-materializadas, funciones, procedimientos, triggers, tipos y dominios,
-extensiones y permisos** no se comparan. Las **tablas particionadas** tampoco:
-la tabla padre se ignora y sus particiones se ven como tablas sueltas, así que
-el script que saldría para ellas no es correcto. Si tu esquema las usa, revisa
-esa parte a mano.
+materializadas, tipos y dominios, extensiones y permisos** no se comparan. Las
+**tablas particionadas** tampoco: la tabla padre se ignora y sus particiones se
+ven como tablas sueltas, así que el script que saldría para ellas no es
+correcto. Si tu esquema las usa, revisa esa parte a mano.
+
+Otra cosa a tener en cuenta: si las dos conexiones apuntan a esquemas con
+**nombres distintos** (por ejemplo `public` contra `ventas`), las definiciones
+de índices y funciones vienen calificadas con el esquema de origen, porque así
+las devuelve PostgreSQL. Comparar el mismo nombre de esquema en dos bases —lo
+habitual— no tiene ese problema.
 
 ## Cómo funciona la dirección de la comparación
 
@@ -54,10 +66,15 @@ El script va envuelto en `BEGIN; ... COMMIT;` y fija
 `SET LOCAL search_path` al esquema de BD1, así las sentencias aplican
 sobre el esquema correcto aunque no sea `public`.
 
-El orden del script respeta las dependencias: las secuencias van antes que las
-tablas (una columna puede tener `DEFAULT nextval(...)`), y las vistas al final,
-cuando ya existen las tablas de las que leen; entre vistas, la que lee de otra
-va después.
+El orden del script respeta las dependencias: secuencias y funciones primero
+(una columna puede tener `DEFAULT nextval(...)` o llamar a una función), luego
+las tablas con sus índices y constraints, después los triggers —que necesitan su
+tabla y su función— y al final las vistas; entre vistas, la que lee de otra va
+después.
+
+El script incluye `SET LOCAL check_function_bodies = false`, igual que hace
+`pg_dump`: sin eso, una función SQL que lea de una tabla que el propio script
+crea más abajo fallaría al validarse su cuerpo.
 
 Las tablas nuevas se crean **en orden de dependencias**: si una apunta a otra
 por clave foránea, la referenciada va primero. Cuando dos tablas se

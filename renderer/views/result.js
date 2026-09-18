@@ -84,6 +84,7 @@
                       <option>Tabla</option><option>Columna</option>
                       <option>Índice</option><option>Constraint</option>
                       <option>Vista</option><option>Secuencia</option>
+                      <option>Función</option><option>Trigger</option>
                     </select>
                   </th>
                   <th>

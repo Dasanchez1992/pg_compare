@@ -122,6 +122,35 @@ WHERE s.schemaname = $1
 ORDER BY s.sequencename;
 `;
 
+// `prokind` existe desde PostgreSQL 11; antes eran dos banderas. Se excluyen
+// agregados y funciones de ventana: pg_get_functiondef no sabe describirlos.
+const functionsSql = (serverVersion) => `
+SELECT p.proname                                      AS name,
+       pg_get_function_identity_arguments(p.oid)      AS args,
+       p.prokind::text                                AS kind,
+       pg_get_functiondef(p.oid)                      AS definition
+FROM pg_proc p
+JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = $1
+  AND ${serverVersion >= 110000 ? "p.prokind IN ('f', 'p')" : 'NOT p.proisagg AND NOT p.proiswindow'}
+ORDER BY p.proname, 2;
+`;
+
+// `tgisinternal` deja fuera los triggers que PostgreSQL crea solo para hacer
+// cumplir las claves foráneas: no son objetos del usuario.
+const TRIGGERS_SQL = `
+SELECT c.relname                        AS table_name,
+       t.tgname                         AS name,
+       pg_get_triggerdef(t.oid, true)   AS definition
+FROM pg_trigger t
+JOIN pg_class c      ON c.oid = t.tgrelid
+JOIN pg_namespace n  ON n.oid = c.relnamespace
+WHERE n.nspname = $1
+  AND NOT t.tgisinternal
+  AND c.relkind IN ('r', 'p')
+ORDER BY c.relname, t.tgname;
+`;
+
 const CONTYPE_LABEL = {
   p: 'PRIMARY KEY',
   f: 'FOREIGN KEY',
@@ -129,6 +158,11 @@ const CONTYPE_LABEL = {
   c: 'CHECK',
   x: 'EXCLUSION',
 };
+
+/** Cita un identificador para usarlo en una sentencia. */
+function quoteIdentifier(name) {
+  return `"${String(name).replace(/"/g, '""')}"`;
+}
 
 /** Configuración del cliente `pg` a partir de una conexión guardada. */
 function clientConfig(conn) {
@@ -150,6 +184,12 @@ async function withClient(conn, fn) {
   const client = new Client(clientConfig(conn));
   await client.connect();
   try {
+    // Con el search_path puesto, pg_get_viewdef y pg_get_triggerdef devuelven
+    // los nombres sin calificar, que es lo que necesita un script pensado para
+    // aplicarse sobre el esquema de destino.
+    if (conn.schema) {
+      await client.query(`SET search_path TO ${quoteIdentifier(conn.schema)}, pg_catalog`);
+    }
     return await fn(client);
   } finally {
     await client.end().catch(() => { /* la conexión ya se fue */ });
@@ -198,6 +238,22 @@ async function introspect(conn) {
     const viewDeps = await client.query(VIEW_DEPS_SQL, [schemaName]);
     for (const row of viewDeps.rows) {
       schema.addViewDependency(row.view_name, row.depends_on);
+    }
+
+    const { rows: [server] } = await client.query(
+      "SELECT current_setting('server_version_num')::int AS num",
+    );
+    const functions = await client.query(functionsSql(server.num), [schemaName]);
+    for (const row of functions.rows) {
+      schema.addFunction(row.name, row.args, {
+        kind: row.kind === 'p' ? 'PROCEDURE' : 'FUNCTION',
+        definition: String(row.definition).trim(),
+      });
+    }
+
+    const triggers = await client.query(TRIGGERS_SQL, [schemaName]);
+    for (const row of triggers.rows) {
+      schema.addTrigger(row.table_name, row.name, String(row.definition).trim());
     }
 
     const sequences = await client.query(SEQUENCES_SQL, [schemaName]);
