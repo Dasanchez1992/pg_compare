@@ -4,8 +4,8 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-dist/
+/build/
+/dist/
 *.egg-info/
 .eggs/
 
@@ -38,3 +38,11 @@ staticfiles/
 # Sistema operativo
 .DS_Store
 Thumbs.db
+
+# App de escritorio (Electron)
+desktop/node_modules/
+desktop/dist/
+desktop/dist-backend/
+desktop/build/.pyinstaller/
+desktop/build/icon.icns
+desktop/build/icon.ico
