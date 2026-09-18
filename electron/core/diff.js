@@ -289,6 +289,9 @@ function orderNewViews(views, source) {
   return topologicalOrder(views, dependencies, (stuck, deps) => deps.get(stuck[0]).clear());
 }
 
+/** Las materializadas se distinguen de las vistas normales en la grilla. */
+const viewLabel = (view) => (view.materialized ? 'Vista mat.' : 'Vista');
+
 /** Etiqueta del tipo para la grilla: los dominios se distinguen. */
 const typeLabel = (type) => (type.kind === 'domain' ? 'Dominio' : 'Tipo');
 
@@ -413,6 +416,9 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
   const onlyTarget = [...tgtTables].filter((t) => !srcTables.has(t)).sort(byText);
   const common = [...srcTables].filter((t) => tgtTables.has(t)).sort(byText);
   const isNewTable = new Set(newTables);
+
+  const srcViews = source.views;
+  const tgtViews = target.views;
 
   // --- Tipos del usuario ----------------------------------------------
   const srcTypes = source.types;
@@ -642,19 +648,30 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
     }
   }
 
-  // --- Índices (los de tablas nuevas ya van en su CREATE TABLE) ------
+  // --- Índices ---------------------------------------------------------
+  // Los de las tablas nuevas y los de las materializadas que se crean o se
+  // recrean ya van dentro de su propia sentencia.
+  const inlineIndexes = new Set([
+    ...isNewTable,
+    ...[...srcViews.values()]
+      .filter((view) => view.materialized
+        && (!tgtViews.has(view.name) || tgtViews.get(view.name).definition !== view.definition))
+      .map((view) => view.name),
+  ]);
+
   for (const idx of missing(source.indexes, target.indexes)) {
-    if (isNewTable.has(idx.table)) continue;
+    if (inlineIndexes.has(idx.table)) continue;
     add('indexes_add', `idx_add:${idx.table}:${idx.name}`, idx.table, idx.name,
       `${idx.def} · solo existe en ${db2Name}`, `${idx.def};`);
   }
   for (const [s, t] of shared(source.indexes, target.indexes)) {
-    if (s.def === t.def) continue;
+    if (s.def === t.def || inlineIndexes.has(s.table)) continue;
     add('indexes_alter', `idx_alter:${s.table}:${s.name}`, s.table, s.name,
       `definición: ${t.def} → ${s.def}`,
       `DROP INDEX ${q(s.name)};\n${s.def};`);
   }
   for (const idx of missing(target.indexes, source.indexes)) {
+    if (inlineIndexes.has(idx.table)) continue;
     add('indexes_drop', `idx_drop:${idx.table}:${idx.name}`, idx.table, idx.name,
       `${idx.def} · solo existe en ${db1Name}`, `-- DROP INDEX ${q(idx.name)};`);
   }
@@ -702,32 +719,38 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
   }
 
   // --- Vistas ---------------------------------------------------------
-  const srcViews = source.views;
-  const tgtViews = target.views;
-
   const newViews = [...srcViews.keys()].filter((name) => !tgtViews.has(name)).sort(byText);
   for (const name of orderNewViews(newViews, source)) {
     const view = srcViews.get(name);
+    const indices = view.materialized ? viewIndexesSql(name, source).length : 0;
     add('views_create', `view_add:${name}`, name, name,
-      `${lineCount(view.definition)} · solo existe en ${db2Name}`,
-      `CREATE VIEW ${q(name)} AS\n${view.definition}`);
+      `${lineCount(view.definition)}${indices ? `, ${indices} índices` : ''}`
+      + ` · solo existe en ${db2Name}`,
+      createViewSql(view, source), { type: viewLabel(view) });
   }
 
   for (const [name, view] of [...srcViews].sort(([a], [b]) => byText(a, b))) {
     const current = tgtViews.get(name);
-    if (!current || current.definition === view.definition) continue;
-    // CREATE OR REPLACE no es destructivo y mantiene los permisos. Si cambió
-    // la lista de columnas PostgreSQL lo rechaza, y como el script va dentro
-    // de una transacción no queda nada a medias.
+    if (!current) continue;
+    if (current.definition === view.definition && current.materialized === view.materialized) {
+      continue;
+    }
+    // Una vista normal se reemplaza sin borrarla: no es destructivo y conserva
+    // los permisos. Una materializada no admite CREATE OR REPLACE, así que hay
+    // que borrarla y rehacerla (con sus índices, que el DROP se lleva).
     add('views_alter', `view_alter:${name}`, name, name,
-      `definición distinta (${lineCount(current.definition)} → ${lineCount(view.definition)})`,
-      `CREATE OR REPLACE VIEW ${q(name)} AS\n${view.definition}`);
+      view.materialized
+        ? `definición distinta: se recrea (${lineCount(current.definition)} → ${lineCount(view.definition)})`
+        : `definición distinta (${lineCount(current.definition)} → ${lineCount(view.definition)})`,
+      createViewSql(view, source, { replace: true }), { type: viewLabel(view) });
   }
 
-  for (const [name] of [...tgtViews].sort(([a], [b]) => byText(a, b))) {
+  for (const [name, view] of [...tgtViews].sort(([a], [b]) => byText(a, b))) {
     if (srcViews.has(name)) continue;
     add('views_drop', `view_drop:${name}`, name, name,
-      `solo existe en ${db1Name}`, `-- DROP VIEW ${q(name)};`);
+      `solo existe en ${db1Name}`,
+      `-- DROP ${view.materialized ? 'MATERIALIZED VIEW' : 'VIEW'} ${q(name)};`,
+      { type: viewLabel(view) });
   }
 
   return { rows, sqlById, totalChanges: rows.length };
@@ -835,6 +858,34 @@ function compareComposite(add, name, type, current, db1Name, db2Name) {
   }
 }
 
+/** Índices propios de una vista materializada, en su CREATE. */
+function viewIndexesSql(name, source) {
+  return itemsOfTable(source.indexes, name)
+    .sort((a, b) => byText(a.name, b.name))
+    .map((index) => `${index.def};`);
+}
+
+/**
+ * CREATE de una vista. La materializada se crea SIN datos y con un REFRESH
+ * comentado detrás: poblarla puede tardar mucho y esa decisión es de quien
+ * aplica el script, no nuestra. Sus índices van dentro, porque si más adelante
+ * hay que recrearla el DROP se los lleva por delante.
+ */
+function createViewSql(view, source, { replace = false } = {}) {
+  if (!view.materialized) {
+    return `CREATE${replace ? ' OR REPLACE' : ''} VIEW ${q(view.name)} AS\n${view.definition}`;
+  }
+  return [
+    ...(replace ? [`DROP MATERIALIZED VIEW ${q(view.name)};`] : []),
+    `CREATE MATERIALIZED VIEW ${q(view.name)} AS`,
+    view.definition.replace(/;$/, ''),
+    'WITH NO DATA;',
+    ...viewIndexesSql(view.name, source),
+    `-- Se crea vacía. Para poblarla (puede tardar):`,
+    `-- REFRESH MATERIALIZED VIEW ${q(view.name)};`,
+  ].join('\n');
+}
+
 /** "3 líneas" — para describir una definición sin volcarla en la grilla. */
 function lineCount(text) {
   const lines = String(text).trim().split('\n').length;
@@ -901,6 +952,7 @@ module.exports = {
   createTableSql,
   createSequenceSql,
   createTypeSql,
+  createViewSql,
   orderNewTables,
   orderNewViews,
   columnDdl,

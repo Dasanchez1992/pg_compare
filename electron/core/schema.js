@@ -36,7 +36,7 @@ class Schema {
      *   references:?{schema:string, table:string}}>}
      */
     this.constraints = new Map();
-    /** @type {Map<string, {name:string, definition:string}>} */
+    /** @type {Map<string, {name:string, definition:string, materialized:boolean}>} */
     this.views = new Map();
     /** De qué tablas y vistas lee cada vista, para poder ordenarlas. */
     /** @type {Map<string, Set<string>>} */
@@ -109,8 +109,8 @@ class Schema {
     });
   }
 
-  addView(name, definition) {
-    this.views.set(name, { name, definition });
+  addView(name, definition, materialized = false) {
+    this.views.set(name, { name, definition, materialized: Boolean(materialized) });
   }
 
   /** Registra que `view` lee de `dependsOn` (tabla o vista del mismo esquema). */

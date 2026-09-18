@@ -129,7 +129,7 @@ JOIN pg_class c      ON c.oid = x.indrelid
 JOIN pg_class i      ON i.oid = x.indexrelid
 JOIN pg_namespace n  ON n.oid = c.relnamespace
 WHERE n.nspname = $1
-  AND c.relkind IN ('r', 'p')
+  AND c.relkind IN ('r', 'p', 'm')   -- las materializadas también los tienen
   AND NOT c.relispartition
   AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.oid)
 ORDER BY c.relname, i.relname;
@@ -156,13 +156,16 @@ WHERE n.nspname = $1
 ORDER BY c.relname, con.conname;
 `;
 
+// Vistas normales ('v') y materializadas ('m'): se leen juntas porque pueden
+// depender unas de otras y hay que crearlas en orden.
 const VIEWS_SQL = `
 SELECT c.relname                       AS view_name,
-       pg_get_viewdef(c.oid, true)     AS definition
+       pg_get_viewdef(c.oid, true)     AS definition,
+       c.relkind = 'm'                 AS materialized
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = $1
-  AND c.relkind = 'v'
+  AND c.relkind IN ('v', 'm')
 ORDER BY c.relname;
 `;
 
@@ -172,7 +175,7 @@ const VIEW_DEPS_SQL = `
 SELECT DISTINCT v.relname   AS view_name,
                 ref.relname AS depends_on
 FROM pg_rewrite r
-JOIN pg_class v          ON v.oid = r.ev_class AND v.relkind = 'v'
+JOIN pg_class v          ON v.oid = r.ev_class AND v.relkind IN ('v', 'm')
 JOIN pg_namespace vn     ON vn.oid = v.relnamespace
 JOIN pg_depend d         ON d.objid = r.oid
                         AND d.classid = 'pg_rewrite'::regclass
@@ -371,7 +374,7 @@ async function introspect(conn) {
     const views = await client.query(VIEWS_SQL, [schemaName]);
     for (const row of views.rows) {
       // pg_get_viewdef ya devuelve la consulta terminada en punto y coma.
-      schema.addView(row.view_name, String(row.definition).trim());
+      schema.addView(row.view_name, String(row.definition).trim(), row.materialized);
     }
 
     const viewDeps = await client.query(VIEW_DEPS_SQL, [schemaName]);

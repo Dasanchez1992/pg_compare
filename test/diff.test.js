@@ -919,3 +919,98 @@ test('el tipo que sobra se borra comentado, con DROP DOMAIN si es dominio', () =
   assert.equal(result.sqlById['type_drop:t'], '-- DROP TYPE "t";');
   assert.equal(result.sqlById['type_drop:d'], '-- DROP DOMAIN "d";');
 });
+
+// --- Vistas materializadas -------------------------------------------------
+
+const CONSULTA = 'SELECT cliente_id,\n    sum(total) AS total\n   FROM pedidos\n  GROUP BY cliente_id;';
+
+test('una materializada nueva se crea sin datos y con el REFRESH comentado', () => {
+  const source = new Schema('ventas');
+  source.addView('resumen', CONSULTA, true);
+
+  const result = compare({ source, target: new Schema('ventas') });
+  assert.equal(result.sqlById['view_add:resumen'], [
+    'CREATE MATERIALIZED VIEW "resumen" AS',
+    'SELECT cliente_id,',
+    '    sum(total) AS total',
+    '   FROM pedidos',
+    '  GROUP BY cliente_id',
+    'WITH NO DATA;',
+    '-- Se crea vacía. Para poblarla (puede tardar):',
+    '-- REFRESH MATERIALIZED VIEW "resumen";',
+  ].join('\n'));
+  assert.equal(result.rows[0].type, 'Vista mat.');
+});
+
+test('los índices de la materializada van dentro de su CREATE', () => {
+  const source = new Schema('ventas');
+  source.addView('resumen', 'SELECT 1;', true);
+  source.addIndex('resumen', 'idx_uno', 'CREATE UNIQUE INDEX idx_uno ON resumen USING btree (a)');
+  source.addIndex('resumen', 'idx_dos', 'CREATE INDEX idx_dos ON resumen USING btree (b)');
+
+  const result = compare({ source, target: new Schema('ventas') });
+  const sql = result.sqlById['view_add:resumen'];
+  assert.match(sql, /CREATE INDEX idx_dos ON resumen USING btree \(b\);/);
+  assert.match(sql, /CREATE UNIQUE INDEX idx_uno ON resumen USING btree \(a\);/);
+  // Y no se emiten además por separado.
+  assert.ok(!Object.keys(result.sqlById).some((id) => id.startsWith('idx_add:')));
+  assert.match(result.rows[0].detail, /2 índices/);
+});
+
+test('la materializada que cambia se recrea y recupera sus índices', () => {
+  const source = new Schema('ventas');
+  source.addView('m', 'SELECT 2;', true);
+  source.addIndex('m', 'idx', 'CREATE UNIQUE INDEX idx ON m USING btree (a)');
+  const target = new Schema('ventas');
+  target.addView('m', 'SELECT 1;', true);
+  target.addIndex('m', 'idx', 'CREATE UNIQUE INDEX idx ON m USING btree (a)');
+
+  const result = compare({ source, target });
+  const sql = result.sqlById['view_alter:m'];
+  // El DROP se lleva los índices por delante, así que hay que rehacerlos.
+  assert.match(sql, /^DROP MATERIALIZED VIEW "m";/);
+  assert.match(sql, /CREATE MATERIALIZED VIEW "m" AS/);
+  assert.match(sql, /CREATE UNIQUE INDEX idx ON m USING btree \(a\);/);
+});
+
+test('una vista normal sí se reemplaza, sin borrarla', () => {
+  const source = new Schema('ventas');
+  source.addView('v', 'SELECT 2;', false);
+  const target = new Schema('ventas');
+  target.addView('v', 'SELECT 1;', false);
+
+  const sql = compare({ source, target }).sqlById['view_alter:v'];
+  assert.match(sql, /^CREATE OR REPLACE VIEW "v" AS/);
+  assert.doesNotMatch(sql, /DROP/);
+});
+
+test('cambiar de vista a materializada también se recrea', () => {
+  const source = new Schema('ventas');
+  source.addView('v', 'SELECT 1;', true);
+  const target = new Schema('ventas');
+  target.addView('v', 'SELECT 1;', false);   // misma consulta, distinta clase
+
+  const result = compare({ source, target });
+  assert.equal(result.totalChanges, 1);
+  assert.match(result.sqlById['view_alter:v'], /^DROP MATERIALIZED VIEW "v";/);
+});
+
+test('la materializada que sobra se borra comentada, con su palabra', () => {
+  const target = new Schema('ventas');
+  target.addView('m', 'SELECT 1;', true);
+  target.addView('v', 'SELECT 1;', false);
+
+  const result = compare({ source: new Schema('ventas'), target });
+  assert.equal(result.sqlById['view_drop:m'], '-- DROP MATERIALIZED VIEW "m";');
+  assert.equal(result.sqlById['view_drop:v'], '-- DROP VIEW "v";');
+});
+
+test('una vista que lee de una materializada va después de ella', () => {
+  const source = new Schema('ventas');
+  source.addView('a_encima', 'SELECT * FROM z_resumen;', false);
+  source.addView('z_resumen', 'SELECT 1;', true);
+  source.addViewDependency('a_encima', 'z_resumen');
+
+  assert.deepEqual(Object.keys(compare({ source, target: new Schema('ventas') }).sqlById),
+    ['view_add:z_resumen', 'view_add:a_encima']);
+});
