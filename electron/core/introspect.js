@@ -69,6 +69,59 @@ WHERE n.nspname = $1
 ORDER BY c.relname, con.conname;
 `;
 
+const VIEWS_SQL = `
+SELECT c.relname                       AS view_name,
+       pg_get_viewdef(c.oid, true)     AS definition
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = $1
+  AND c.relkind = 'v'
+ORDER BY c.relname;
+`;
+
+// De qué lee cada vista, dentro del mismo esquema: hace falta para crearlas en
+// orden (una vista puede leer de otra).
+const VIEW_DEPS_SQL = `
+SELECT DISTINCT v.relname   AS view_name,
+                ref.relname AS depends_on
+FROM pg_rewrite r
+JOIN pg_class v          ON v.oid = r.ev_class AND v.relkind = 'v'
+JOIN pg_namespace vn     ON vn.oid = v.relnamespace
+JOIN pg_depend d         ON d.objid = r.oid
+                        AND d.classid = 'pg_rewrite'::regclass
+                        AND d.refclassid = 'pg_class'::regclass
+JOIN pg_class ref        ON ref.oid = d.refobjid
+JOIN pg_namespace rn     ON rn.oid = ref.relnamespace
+WHERE vn.nspname = $1
+  AND rn.nspname = $1
+  AND ref.oid <> v.oid
+ORDER BY 1, 2;
+`;
+
+// Solo las secuencias independientes: las que respaldan un `serial` o una
+// columna de identidad las crea PostgreSQL con su tabla, y emitirlas aparte
+// duplicaría el objeto.
+const SEQUENCES_SQL = `
+SELECT s.sequencename        AS name,
+       s.data_type::text     AS data_type,
+       s.start_value::text   AS start_value,
+       s.min_value::text     AS min_value,
+       s.max_value::text     AS max_value,
+       s.increment_by::text  AS increment_by,
+       s.cycle               AS cycle,
+       s.cache_size::text    AS cache_size
+FROM pg_sequences s
+JOIN pg_class c     ON c.relname = s.sequencename AND c.relkind = 'S'
+JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = s.schemaname
+WHERE s.schemaname = $1
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_depend d
+    WHERE d.classid = 'pg_class'::regclass
+      AND d.objid = c.oid
+      AND d.deptype IN ('a', 'i'))
+ORDER BY s.sequencename;
+`;
+
 const CONTYPE_LABEL = {
   p: 'PRIMARY KEY',
   f: 'FOREIGN KEY',
@@ -134,6 +187,30 @@ async function introspect(conn) {
         row.definition,
         row.ref_table ? { schema: row.ref_schema, table: row.ref_table } : null,
       );
+    }
+
+    const views = await client.query(VIEWS_SQL, [schemaName]);
+    for (const row of views.rows) {
+      // pg_get_viewdef ya devuelve la consulta terminada en punto y coma.
+      schema.addView(row.view_name, String(row.definition).trim());
+    }
+
+    const viewDeps = await client.query(VIEW_DEPS_SQL, [schemaName]);
+    for (const row of viewDeps.rows) {
+      schema.addViewDependency(row.view_name, row.depends_on);
+    }
+
+    const sequences = await client.query(SEQUENCES_SQL, [schemaName]);
+    for (const row of sequences.rows) {
+      schema.addSequence(row.name, {
+        dataType: row.data_type,
+        start: row.start_value,
+        min: row.min_value,
+        max: row.max_value,
+        increment: row.increment_by,
+        cycle: row.cycle,
+        cache: row.cache_size,
+      });
     }
 
     return schema;

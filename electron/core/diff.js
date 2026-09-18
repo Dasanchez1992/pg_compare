@@ -37,6 +37,9 @@ const CONSTRAINT_PRIORITY = {
 
 // Grupos en el orden en que se emiten al script.
 const GROUP_ORDER = [
+  // Las secuencias van primero: una columna puede tener DEFAULT nextval(...).
+  'sequences_create',
+  'sequences_alter',
   'tables_create',
   'tables_drop',
   'columns_add',
@@ -48,10 +51,16 @@ const GROUP_ORDER = [
   'constraints_add',
   'constraints_alter',
   'constraints_drop',
+  // Las vistas, al final: leen de las tablas que se acaban de crear o cambiar.
+  'views_create',
+  'views_alter',
+  'views_drop',
+  'sequences_drop',
 ];
 
 const DESTRUCTIVE_GROUPS = new Set([
   'tables_drop', 'columns_drop', 'indexes_drop', 'constraints_drop',
+  'views_drop', 'sequences_drop',
 ]);
 
 // Metadatos por grupo para la grilla: [tipo, estado, clase del badge].
@@ -67,7 +76,25 @@ const GROUP_META = {
   constraints_add: ['Constraint', 'Nuevo', 'b-add'],
   constraints_alter: ['Constraint', 'Diferente', 'b-chg'],
   constraints_drop: ['Constraint', 'Sobra', 'b-del'],
+  views_create: ['Vista', 'Nuevo', 'b-add'],
+  views_alter: ['Vista', 'Diferente', 'b-chg'],
+  views_drop: ['Vista', 'Sobra', 'b-del'],
+  sequences_create: ['Secuencia', 'Nuevo', 'b-add'],
+  sequences_alter: ['Secuencia', 'Diferente', 'b-chg'],
+  sequences_drop: ['Secuencia', 'Sobra', 'b-del'],
 };
+
+// Atributos de una secuencia: clave, etiqueta para el detalle y cómo se
+// escriben en SQL.
+const SEQUENCE_ATTRS = [
+  ['dataType', 'tipo', (v) => `AS ${v}`],
+  ['increment', 'incremento', (v) => `INCREMENT BY ${v}`],
+  ['min', 'mínimo', (v) => `MINVALUE ${v}`],
+  ['max', 'máximo', (v) => `MAXVALUE ${v}`],
+  ['start', 'inicio', (v) => `START WITH ${v}`],
+  ['cache', 'caché', (v) => `CACHE ${v}`],
+  ['cycle', 'ciclo', (v) => (v ? 'CYCLE' : 'NO CYCLE')],
+];
 
 /** Cita un identificador de PostgreSQL entre comillas dobles. */
 function q(identifier) {
@@ -178,6 +205,68 @@ function foreignKeysWithin(table, source, within) {
 }
 
 /**
+ * Orden topológico estable: cada nodo va después de aquellos de los que
+ * depende, y a igualdad de dependencias, por nombre.
+ *
+ * @param {string[]} nodes
+ * @param {Map<string, Map<string, *>>} dependencies  nodo -> dependencias suyas
+ * @param {function} breakCycle  recibe (atascados, dependencies, pendientes) y
+ *   debe quitar al menos una arista; solo se llama si queda un ciclo.
+ */
+function topologicalOrder(nodes, dependencies, breakCycle) {
+  const pending = new Set(nodes);
+  const ordered = [];
+
+  while (pending.size) {
+    const ready = [...pending]
+      .filter((node) => ![...dependencies.get(node).keys()].some((dep) => pending.has(dep)))
+      .sort(byText);
+
+    if (ready.length) {
+      for (const node of ready) {
+        ordered.push(node);
+        pending.delete(node);
+      }
+      continue;
+    }
+    breakCycle([...pending].sort(byText), dependencies, pending);
+  }
+
+  return ordered;
+}
+
+/**
+ * Ordena las vistas nuevas: si una lee de otra, la leída va primero.
+ * PostgreSQL no permite vistas mutuamente dependientes, pero el corte está
+ * puesto por si acaso, para no quedarse dando vueltas.
+ */
+function orderNewViews(views, source) {
+  const within = new Set(views);
+  const dependencies = new Map(views.map((view) => {
+    const deps = new Map();
+    for (const dep of source.viewDependencies.get(view) || []) {
+      if (within.has(dep)) deps.set(dep, true);
+    }
+    return [view, deps];
+  }));
+
+  return topologicalOrder(views, dependencies, (stuck, deps) => deps.get(stuck[0]).clear());
+}
+
+/** Sentencia CREATE de una secuencia independiente. */
+function createSequenceSql(seq) {
+  return [
+    `CREATE SEQUENCE ${q(seq.name)}`,
+    ...SEQUENCE_ATTRS.map(([field, , render]) => `    ${render(seq[field])}`),
+  ].join('\n') + ';';
+}
+
+/** Atributos en los que difieren dos secuencias. */
+function sequenceChanges(source, target) {
+  return SEQUENCE_ATTRS.filter(([field]) => String(source[field]) !== String(target[field]));
+}
+
+/**
  * Ordena las tablas nuevas para que cada una se cree después de aquellas a las
  * que apunta por clave foránea; a igualdad de dependencias, por nombre.
  *
@@ -189,37 +278,22 @@ function foreignKeysWithin(table, source, within) {
  */
 function orderNewTables(tables, source) {
   const within = new Set(tables);
-  const pending = new Set(tables);
   const dependencies = new Map(
     tables.map((table) => [table, foreignKeysWithin(table, source, within)]),
   );
-
-  const ordered = [];
   const deferred = new Set();
 
-  while (pending.size) {
-    const ready = [...pending]
-      .filter((table) => ![...dependencies.get(table).keys()].some((dep) => pending.has(dep)))
-      .sort(byText);
-
-    if (ready.length) {
-      for (const table of ready) {
-        ordered.push(table);
-        pending.delete(table);
-      }
-      continue;
-    }
-
-    // Lo que queda forma uno o más ciclos. Se rompe el de una sola tabla —la
-    // primera por nombre— y se vuelve a intentar: así se aplazan las menos
-    // claves foráneas posibles y el script queda más limpio.
-    const [table] = [...pending].sort(byText);
-    for (const [dep, names] of [...dependencies.get(table)]) {
+  // Lo que queda atascado forma uno o más ciclos. Se rompe el de una sola
+  // tabla —la primera por nombre— y se vuelve a intentar: así se aplazan las
+  // menos claves foráneas posibles y el script queda más limpio.
+  const ordered = topologicalOrder(tables, dependencies, (stuck, deps, pending) => {
+    const [table] = stuck;
+    for (const [dep, names] of [...deps.get(table)]) {
       if (!pending.has(dep)) continue;
       names.forEach((name) => deferred.add(key(table, name)));
-      dependencies.get(table).delete(dep);
+      deps.get(table).delete(dep);
     }
-  }
+  });
 
   return { ordered, deferred };
 }
@@ -257,6 +331,34 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
   const onlyTarget = [...tgtTables].filter((t) => !srcTables.has(t)).sort(byText);
   const common = [...srcTables].filter((t) => tgtTables.has(t)).sort(byText);
   const isNewTable = new Set(newTables);
+
+  // --- Secuencias independientes -------------------------------------
+  const srcSequences = source.sequences;
+  const tgtSequences = target.sequences;
+
+  for (const [name, seq] of [...srcSequences].sort(([a], [b]) => byText(a, b))) {
+    if (tgtSequences.has(name)) continue;
+    add('sequences_create', `seq_add:${name}`, name, name,
+      `${seq.dataType}, incremento ${seq.increment} · solo existe en ${db2Name}`,
+      createSequenceSql(seq));
+  }
+
+  for (const [name, seq] of [...srcSequences].sort(([a], [b]) => byText(a, b))) {
+    const current = tgtSequences.get(name);
+    if (!current) continue;
+    const changes = sequenceChanges(seq, current);
+    if (!changes.length) continue;
+
+    add('sequences_alter', `seq_alter:${name}`, name, name,
+      changes.map(([field, label]) => `${label}: ${current[field]} → ${seq[field]}`).join(' · '),
+      `ALTER SEQUENCE ${q(name)} ${changes.map(([field, , render]) => render(seq[field])).join(' ')};`);
+  }
+
+  for (const [name] of [...tgtSequences].sort(([a], [b]) => byText(a, b))) {
+    if (srcSequences.has(name)) continue;
+    add('sequences_drop', `seq_drop:${name}`, name, name,
+      `solo existe en ${db1Name}`, `-- DROP SEQUENCE ${q(name)};`);
+  }
 
   // --- Tablas nuevas: CREATE TABLE completo --------------------------
   for (const table of newTablesOrdered) {
@@ -369,7 +471,42 @@ function compare({ source, target, db1Name = 'BD1', db2Name = 'BD2' }) {
       `-- ALTER TABLE ${q(con.table)} DROP CONSTRAINT ${q(con.name)};`);
   }
 
+  // --- Vistas ---------------------------------------------------------
+  const srcViews = source.views;
+  const tgtViews = target.views;
+
+  const newViews = [...srcViews.keys()].filter((name) => !tgtViews.has(name)).sort(byText);
+  for (const name of orderNewViews(newViews, source)) {
+    const view = srcViews.get(name);
+    add('views_create', `view_add:${name}`, name, name,
+      `${lineCount(view.definition)} · solo existe en ${db2Name}`,
+      `CREATE VIEW ${q(name)} AS\n${view.definition}`);
+  }
+
+  for (const [name, view] of [...srcViews].sort(([a], [b]) => byText(a, b))) {
+    const current = tgtViews.get(name);
+    if (!current || current.definition === view.definition) continue;
+    // CREATE OR REPLACE no es destructivo y mantiene los permisos. Si cambió
+    // la lista de columnas PostgreSQL lo rechaza, y como el script va dentro
+    // de una transacción no queda nada a medias.
+    add('views_alter', `view_alter:${name}`, name, name,
+      `definición distinta (${lineCount(current.definition)} → ${lineCount(view.definition)})`,
+      `CREATE OR REPLACE VIEW ${q(name)} AS\n${view.definition}`);
+  }
+
+  for (const [name] of [...tgtViews].sort(([a], [b]) => byText(a, b))) {
+    if (srcViews.has(name)) continue;
+    add('views_drop', `view_drop:${name}`, name, name,
+      `solo existe en ${db1Name}`, `-- DROP VIEW ${q(name)};`);
+  }
+
   return { rows, sqlById, totalChanges: rows.length };
+}
+
+/** "3 líneas" — para describir una definición sin volcarla en la grilla. */
+function lineCount(text) {
+  const lines = String(text).trim().split('\n').length;
+  return `${lines} ${lines === 1 ? 'línea' : 'líneas'}`;
 }
 
 /** Objetos de `a` que no están en `b`, ordenados por (tabla, nombre). */
@@ -427,7 +564,9 @@ module.exports = {
   compare,
   buildScript,
   createTableSql,
+  createSequenceSql,
   orderNewTables,
+  orderNewViews,
   columnDdl,
   commentSql,
   literal,

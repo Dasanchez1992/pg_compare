@@ -36,6 +36,18 @@ class Schema {
      *   references:?{schema:string, table:string}}>}
      */
     this.constraints = new Map();
+    /** @type {Map<string, {name:string, definition:string}>} */
+    this.views = new Map();
+    /** De qué tablas y vistas lee cada vista, para poder ordenarlas. */
+    /** @type {Map<string, Set<string>>} */
+    this.viewDependencies = new Map();
+    /**
+     * Secuencias independientes. Las que crea un `serial` no entran: se
+     * generan solas con su tabla.
+     * @type {Map<string, {name:string, dataType:string, start:string,
+     *   min:string, max:string, increment:string, cycle:boolean, cache:string}>}
+     */
+    this.sequences = new Map();
   }
 
   addColumn(table, column, info) {
@@ -52,6 +64,20 @@ class Schema {
     this.constraints.set(key(table, name), {
       table, name, type, def, references,
     });
+  }
+
+  addView(name, definition) {
+    this.views.set(name, { name, definition });
+  }
+
+  /** Registra que `view` lee de `dependsOn` (tabla o vista del mismo esquema). */
+  addViewDependency(view, dependsOn) {
+    if (!this.viewDependencies.has(view)) this.viewDependencies.set(view, new Set());
+    this.viewDependencies.get(view).add(dependsOn);
+  }
+
+  addSequence(name, info) {
+    this.sequences.set(name, { name, ...info });
   }
 
   /** Columnas de una tabla, o un mapa vacío si no existe. */

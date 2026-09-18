@@ -18,8 +18,25 @@ avisarte de versiones nuevas: nada más, y nada de tus datos sale del equipo.
 - **Constraints** (PRIMARY KEY, FOREIGN KEY, UNIQUE, CHECK, EXCLUSION),
   incluyendo los que existen en ambas bases pero con definición distinta
 - **Tablas** completas que existen en una y no en otra
+- **Vistas**: nuevas, sobrantes y con definición distinta. Las que cambian se
+  actualizan con `CREATE OR REPLACE VIEW`, que no borra nada ni pierde los
+  permisos; si cambió la lista de columnas PostgreSQL lo rechaza y, como el
+  script va en una transacción, no queda nada a medias
+- **Secuencias** independientes: se crean, se borran o se ajustan solo los
+  atributos que cambiaron (tipo, incremento, mínimo, máximo, inicio, caché y
+  ciclo). Las que respaldan un `serial` no se tocan: las crea PostgreSQL junto
+  con su tabla
 
 Además puedes **guardar N conexiones** y seleccionarlas para comparar.
+
+### Qué no compara todavía
+
+Conviene saberlo antes de confiar en un "no hay diferencias": **vistas
+materializadas, funciones, procedimientos, triggers, tipos y dominios,
+extensiones y permisos** no se comparan. Las **tablas particionadas** tampoco:
+la tabla padre se ignora y sus particiones se ven como tablas sueltas, así que
+el script que saldría para ellas no es correcto. Si tu esquema las usa, revisa
+esa parte a mano.
 
 ## Cómo funciona la dirección de la comparación
 
@@ -36,6 +53,11 @@ no implican pérdida de datos.
 El script va envuelto en `BEGIN; ... COMMIT;` y fija
 `SET LOCAL search_path` al esquema de BD1, así las sentencias aplican
 sobre el esquema correcto aunque no sea `public`.
+
+El orden del script respeta las dependencias: las secuencias van antes que las
+tablas (una columna puede tener `DEFAULT nextval(...)`), y las vistas al final,
+cuando ya existen las tablas de las que leen; entre vistas, la que lee de otra
+va después.
 
 Las tablas nuevas se crean **en orden de dependencias**: si una apunta a otra
 por clave foránea, la referenciada va primero. Cuando dos tablas se
