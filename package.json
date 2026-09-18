@@ -1,7 +1,7 @@
 {
   "name": "pg-compare",
   "productName": "Comparador de BD",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Aplicación de escritorio para comparar la estructura de dos bases PostgreSQL y generar el script ALTER.",
   "author": {
     "name": "Danilo Sánchez",
