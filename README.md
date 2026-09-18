@@ -1,13 +1,12 @@
 # Comparador de Bases de Datos PostgreSQL
 
-Compara la **estructura** de dos bases de datos PostgreSQL y genera el
-**script `ALTER`** necesario para igualar BD1 con BD2.
+Aplicación de **escritorio** (Windows, macOS y Linux) que compara la
+**estructura** de dos bases de datos PostgreSQL y genera el **script `ALTER`**
+necesario para igualar BD1 con BD2.
 
-Se puede usar de dos formas, con el mismo código y las mismas pantallas:
-
-- **App de escritorio** (Windows, macOS y Linux): Electron con el backend
-  Django embebido. Ver [`desktop/README.md`](desktop/README.md).
-- **App web**: el proyecto Django de siempre, con `python manage.py runserver`.
+Todo se ejecuta en la máquina de quien compara: no hay servidor, ni servicio
+web, ni nada que instalar aparte de la propia aplicación. Las únicas
+conexiones de red que abre son las que van a las bases de datos que registres.
 
 ## Qué compara
 
@@ -37,82 +36,94 @@ sobre el esquema correcto aunque no sea `public`.
 
 ## Instalación
 
-### Como app de escritorio
+Descarga el instalador de tu sistema (`.exe`, `.dmg`, `.AppImage` o `.deb`)
+y ábrelo. No hace falta Python, ni Node, ni un servidor local.
+
+Para trabajar sobre el código:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements-desktop.txt
-
-cd desktop
 npm install
-npm start                          # abre la ventana de la aplicación
+npm start          # abre la aplicación
+npm test           # pruebas del comparador y del almacén
 ```
 
-Para generar los instaladores (`.dmg`, `.exe`, `.AppImage`, `.deb`):
-`cd desktop && npm run dist`. Los detalles, la carpeta donde se guardan los
-datos del usuario y la resolución de problemas están en
-[`desktop/README.md`](desktop/README.md).
-
-### Como app web
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# Prepara la BD interna (guarda las conexiones registradas)
-python manage.py migrate
-
-# (Opcional) crea un usuario admin para /admin/
-python manage.py createsuperuser
-
-# Arranca el servidor
-python manage.py runserver
-```
-
-Abre http://127.0.0.1:8000/
+Requisitos de desarrollo: Node.js 20 o superior.
 
 ## Uso
 
 1. Ve a **Conexiones → Nueva conexión** y registra tus bases (host, puerto,
    base, usuario, contraseña, esquema). Usa **Probar** para validar.
 2. Compara de una de estas dos formas:
-   - **Comparar**: selecciona **BD1** (destino) y **BD2** (referencia) para una
-     comparación puntual.
+   - **Comparar (ad hoc)**: selecciona **BD1** (destino) y **BD2** (referencia)
+     para una comparación puntual.
    - **Proyectos** (página de inicio): guarda un par BD1/BD2 con nombre y
      ejecuta la comparación con un clic cada vez que la necesites.
 3. En el resultado, revisa la grilla de diferencias (filtrable por nombre,
    tipo y estado) y **marca con los checkboxes** los cambios que quieres
-   incluir.
-4. Pulsa **Generar script** y luego **descarga el `.sql`** o cópialo.
+   incluir. Vienen todos marcados.
+4. Pulsa **Generar script** y luego **guárdalo como `.sql`** o cópialo.
 
 Cada comparación se guarda en el **Historial**: puedes volver a abrirla
 (con el script y la selección que dejaste), **re-ejecutarla** sobre las
 mismas bases para obtener un resultado fresco, o eliminarla.
 
+Atajos: `Ctrl/Cmd+N` nueva conexión, `Ctrl/Cmd+D` nueva comparación,
+`Ctrl/Cmd+S` guardar el script, `Ctrl/Cmd+1..4` para moverse entre secciones.
+
+## Cómo está hecha
+
+```
+electron/            proceso principal (Node): ventana, menú y acceso a datos
+  core/diff.js       comparación de esquemas y generación del script ALTER
+  core/introspect.js lectura del catálogo de PostgreSQL (driver `pg`)
+  core/store.js      almacén local en JSON (conexiones, proyectos, historial)
+  core/secrets.js    cifrado de contraseñas con el llavero del sistema
+  ipc.js             operaciones que la interfaz puede pedir
+renderer/            interfaz (HTML/CSS/JS sin dependencias ni compilación)
+test/                pruebas con el runner de Node
+build/               icono y recursos de empaquetado
+```
+
+La interfaz corre aislada: sin acceso a Node ni al sistema de archivos, y
+solo puede pedir las operaciones declaradas en `electron/preload.js`. El
+acceso a PostgreSQL y al disco ocurre siempre en el proceso principal.
+
+## Dónde se guardan los datos
+
+| Sistema | Carpeta |
+| --- | --- |
+| Windows | `%APPDATA%\pg-compare-desktop` |
+| macOS | `~/Library/Application Support/pg-compare-desktop` |
+| Linux | `~/.config/pg-compare-desktop` |
+
+Contiene `data.json` (conexiones, proyectos e índice del historial),
+`runs/<id>.json` (el resultado de cada comparación), `window-state.json` y
+`logs/app.log`. Se abre desde **Archivo → Abrir carpeta de datos**.
+Desinstalar la aplicación no borra esa carpeta.
+
+## Construir los instaladores
+
+```bash
+npm run dist          # instalador del sistema actual
+npm run pack          # solo la carpeta de la app, sin instalador
+npm run icon          # regenera build/icon.png
+```
+
+Salidas: `.dmg`/`.zip` (macOS), `.exe` NSIS y portable (Windows),
+`.AppImage` y `.deb` (Linux), en `dist/`. Cada instalador se construye en su
+propio sistema operativo; para macOS conviene además firmar y notarizar.
+
 ## Notas
 
-- La BD interna de la app usa SQLite por defecto (`db.sqlite3`). Puedes
-  cambiarla a PostgreSQL en `dbcompare/settings.py` → `DATABASES`.
-  En la app de escritorio ese archivo vive en la carpeta de datos del usuario,
-  no junto al código.
-- Las dependencias de la app de escritorio (`waitress`, `whitenoise` y
-  `pyinstaller`) están en `requirements-desktop.txt`; el modo web solo necesita
-  `requirements.txt`.
-- `highlight.js` se sirve desde `comparator/static/` en vez de un CDN, para que
-  la app funcione sin conexión. Si despliegas la versión web con `DEBUG=False`,
-  ejecuta `python manage.py collectstatic` (con `whitenoise` instalado se
-  sirven solos).
-- Las contraseñas de las conexiones se guardan en texto plano en la BD interna.
-  Para producción, considera cifrarlas o usar variables de entorno / un
-  gestor de secretos.
+- Las contraseñas se guardan cifradas con el llavero del sistema (Keychain,
+  DPAPI, libsecret/kwallet). Si el sistema no ofrece llavero, la aplicación
+  lo avisa en la barra inferior y las guarda en texto plano.
+- Marca **Conectar con SSL** en la conexión si el servidor exige cifrado.
 - Solo se comparan tablas ordinarias (`relkind = 'r'`) del esquema indicado.
   No se comparan vistas, secuencias, funciones ni triggers.
 - La comparación de índices/constraints usa el texto de `pg_get_indexdef` /
   `pg_get_constraintdef`: si las dos bases corren versiones muy distintas de
   PostgreSQL pueden aparecer falsos positivos por diferencias de formato.
-- La versión web no tiene autenticación propia: pensada para uso local o en
-  red interna de confianza. La app de escritorio sí protege su backend: escucha
-  solo en loopback, en un puerto aleatorio, y exige un token que genera Electron
-  en cada arranque.
+- Versiones anteriores de este proyecto eran una app web en Django. El
+  comparador es el mismo, portado a JavaScript; el historial de git conserva
+  aquella versión.
