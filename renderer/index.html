@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <!-- Todo es local: no se carga nada de la red. -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self';">
+    <title>Comparador de BD</title>
+    <link rel="stylesheet" href="vendor/highlight/github-dark.min.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="layout">
+    <header>
+        <a class="brand" data-route="#/"><span class="logo">🗄️</span> Comparador de BD</a>
+        <nav>
+            <a data-route="#/" data-match="proyectos">Proyectos</a>
+            <a data-route="#/comparar" data-match="comparar">Comparar (ad hoc)</a>
+            <a data-route="#/historial" data-match="historial">Historial</a>
+            <a data-route="#/conexiones" data-match="conexiones">Conexiones</a>
+        </nav>
+    </header>
+
+    <div id="view-scroll">
+        <div id="messages" aria-live="polite"></div>
+        <main id="view"></main>
+    </div>
+
+    <footer class="statusbar">
+        <span id="status-storage"></span>
+        <span class="spacer"></span>
+        <a id="open-data-dir">Abrir carpeta de datos</a>
+        <span id="status-version" class="muted"></span>
+    </footer>
+</div>
+
+<script src="vendor/highlight/highlight.min.js"></script>
+<script src="vendor/highlight/sql.min.js"></script>
+<script src="app.js"></script>
+<script src="views/projects.js"></script>
+<script src="views/connections.js"></script>
+<script src="views/compare.js"></script>
+<script src="views/history.js"></script>
+<script src="views/result.js"></script>
+<script src="boot.js"></script>
+</body>
+</html>

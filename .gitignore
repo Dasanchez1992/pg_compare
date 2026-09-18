@@ -1,33 +1,11 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-/build/
-/dist/
-*.egg-info/
-.eggs/
+# Dependencias y artefactos de compilación
+node_modules/
+dist/
+build/icon.icns
+build/icon.ico
 
-# Entornos virtuales
-.venv/
-venv/
-env/
-ENV/
-
-# Django
+# Datos y registros locales
 *.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-media/
-staticfiles/
-/static/
-
-# Variables de entorno / secretos
-.env
-.env.*
-*.pem
 
 # Editores / IDE
 .vscode/
@@ -38,11 +16,3 @@ staticfiles/
 # Sistema operativo
 .DS_Store
 Thumbs.db
-
-# App de escritorio (Electron)
-desktop/node_modules/
-desktop/dist/
-desktop/dist-backend/
-desktop/build/.pyinstaller/
-desktop/build/icon.icns
-desktop/build/icon.ico
