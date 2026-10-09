@@ -2,6 +2,9 @@
 
 /** Resultado de una comparación: grilla de diferencias y script ALTER. */
 (() => {
+  // Cambios que cuelgan de una tabla.
+  const TABLE_CHILD_TYPES = new Set(['Columna', 'Índice', 'Constraint', 'Trigger', 'Partición']);
+
   const {
     html, raw, notify, route, formatDate, highlight, copyText, $, $$,
   } = window.App;
@@ -37,10 +40,23 @@
     // marcado (el usuario desmarca lo que no quiera aplicar).
     const selected = new Set(run.hasScript ? run.selectedIds : run.rows.map((r) => r.id));
 
+    // Una tabla que existe en ambas bases no tiene fila propia: sus cambios
+    // salen como columnas, índices, etc. Para que el filtro "Tabla" la
+    // encuentre, cada uno de esos cambios hereda el estado de su tabla
+    // (Nuevo/Sobra si la tabla entera se crea o se borra, Diferente si no).
+    const estadoTabla = new Map(run.rows
+      .filter((r) => r.type === 'Tabla').map((r) => [r.table, r.status]));
+    const tableStatusOf = (item) => {
+      if (item.type === 'Tabla') return item.status;
+      if (!TABLE_CHILD_TYPES.has(item.type)) return '';
+      return estadoTabla.get(item.table) || 'Diferente';
+    };
+
     const filas = run.rows.map((item) => raw(html`
       <tr data-id="${item.id}" data-name="${item.name.toLowerCase()}"
           data-table="${item.table.toLowerCase()}"
-          data-type="${item.type}" data-status="${item.status}">
+          data-type="${item.type}" data-status="${item.status}"
+          data-table-status="${tableStatusOf(item)}">
         <td class="check-cell">
           <input type="checkbox" style="width:auto;" ${selected.has(item.id) ? raw('checked') : ''}>
         </td>
@@ -90,7 +106,8 @@
                   <th>
                     <select id="f-type">
                       <option value="">(todos)</option>
-                      <option>Tabla</option><option>Columna</option>
+                      <option title="La tabla y sus columnas, índices, constraints, triggers y particiones">Tabla</option>
+                      <option>Columna</option>
                       <option>Índice</option><option>Constraint</option>
                       <option>Vista</option><option>Vista mat.</option>
                       <option>Secuencia</option>
@@ -258,11 +275,18 @@
           const type = $('#f-type', root).value;
           const status = $('#f-status', root).value;
 
+          // "Tabla" abarca la tabla y todo lo que cuelga de ella, y el estado
+          // se mira en la tabla: "Tabla + Diferente" son los cambios de las
+          // tablas que existen en ambas bases. "Manual" se mira en la fila.
+          const porTabla = type === 'Tabla';
+          const estadoDe = (tr) => (porTabla && status !== 'Manual'
+            ? tr.dataset.tableStatus : tr.dataset.status);
+
           for (const tr of rowsEls) {
             const ok = (!name || tr.dataset.name.includes(name))
               && (!table || tr.dataset.table.includes(table))
-              && (!type || tr.dataset.type === type)
-              && (!status || tr.dataset.status === status);
+              && (!type || (porTabla ? tr.dataset.tableStatus !== '' : tr.dataset.type === type))
+              && (!status || estadoDe(tr) === status);
             tr.style.display = ok ? '' : 'none';
           }
           refreshSelection();
