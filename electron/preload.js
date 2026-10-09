@@ -51,6 +51,13 @@ contextBridge.exposeInMainWorld('api', {
     check: () => call('updates:check'),
     skip: (version) => call('updates:skip', version),
     download: (url) => call('updates:download', url),
+    install: () => call('updates:install'),
+    /** Progreso de la descarga: `{ received, total }` en bytes. */
+    onProgress: (callback) => {
+      const listener = (_event, data) => callback(data);
+      ipcRenderer.on('update:progress', listener);
+      return () => ipcRenderer.removeListener('update:progress', listener);
+    },
     /** Aviso empujado desde el proceso principal al encontrar una versión. */
     onAvailable: (callback) => {
       ipcRenderer.on('update:available', (_event, update) => callback(update));

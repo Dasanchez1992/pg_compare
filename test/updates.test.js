@@ -72,6 +72,14 @@ test('elige el archivo que le toca a cada sistema', () => {
     'app-2.1.0.dmg');
 });
 
+test('cada instalación se actualiza con un archivo de su mismo tipo', () => {
+  const { assets } = release('v2.1.0', ASSETS);
+  assert.equal(pickAsset(assets, 'win32', 'nsis').name, 'Comparador.de.BD.Setup.2.1.0.exe');
+  assert.equal(pickAsset(assets, 'win32', 'portable').name, 'Comparador.de.BD.2.1.0.exe');
+  assert.equal(pickAsset(assets, 'linux', 'appimage').name, 'Comparador.de.BD-2.1.0.AppImage');
+  assert.equal(pickAsset(assets, 'linux', 'deb').name, 'pg-compare_2.1.0_amd64.deb');
+});
+
 test('los archivos auxiliares nunca se ofrecen como descarga', () => {
   const assets = release('v2.1.0', ['latest.yml', 'app.exe.blockmap']).assets;
   assert.equal(pickAsset(assets, 'win32'), null);

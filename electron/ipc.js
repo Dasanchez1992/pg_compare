@@ -17,12 +17,18 @@ const { app, dialog, ipcMain, net, shell } = require('electron');
 const { compare, buildScript } = require('./core/diff');
 const { introspect, testConnection } = require('./core/introspect');
 const { checkForUpdate, repoFromPackage } = require('./core/updates');
+const installer = require('./installer');
 
 const REPO = repoFromPackage(require('../package.json'));
 
 // Cada cuánto se vuelve a mirar si hay versión nueva, con la app abierta.
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 const FIRST_CHECK_DELAY_MS = 8000;
+
+// Última versión encontrada. La instalación usa esta, nunca una dirección que
+// llegue desde la interfaz.
+let latestUpdate = null;
+let installing = null;
 
 /** Envuelve un handler para que nunca reviente el canal IPC. */
 function handler(fn, logger) {
@@ -50,6 +56,32 @@ async function appFetch(url, options) {
 }
 
 /**
+ * Descarga la versión encontrada y la instala, avisando del progreso a la
+ * ventana. Si ya hay una instalación en curso, se reutiliza.
+ */
+function installUpdate({ logger, getWindow }) {
+  if (installing) return installing;
+  const update = latestUpdate;
+  if (!update || !update.asset) {
+    return Promise.reject(new Error('No hay ninguna versión nueva para instalar.'));
+  }
+  const send = (channel, data) => {
+    const win = getWindow();
+    if (win && !win.isDestroyed()) win.webContents.send(channel, data);
+  };
+
+  installing = (async () => {
+    logger.info(`Descargando ${update.asset.name}.`);
+    const file = await installer.download(update.asset, {
+      fetchImpl: appFetch,
+      onProgress: (received, total) => send('update:progress', { received, total }),
+    });
+    return installer.install(file, installer.installKind(), logger);
+  })().finally(() => { installing = null; });
+  return installing;
+}
+
+/**
  * Busca una versión nueva y avisa a la ventana.
  *
  * @param {boolean} manual  true si lo pidió el usuario desde el menú: entonces
@@ -63,6 +95,7 @@ async function runUpdateCheck({ store, logger, getWindow, manual = false }) {
     const update = await checkForUpdate({
       repo: REPO,
       currentVersion: app.getVersion(),
+      install: installer.installKind(),
       fetchImpl: appFetch,
     });
     store.updateSettings('updates', { lastCheck: new Date().toISOString() });
@@ -76,6 +109,8 @@ async function runUpdateCheck({ store, logger, getWindow, manual = false }) {
       return null;
     }
 
+    update.canInstall = Boolean(update.asset) && installer.canInstall();
+    latestUpdate = update;
     logger.info(`Versión ${update.version} disponible.`);
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.send('update:available', update);
@@ -236,6 +271,9 @@ function registerIpc({ store, cipher, logger, getWindow }) {
 
   /** "Ahora no": no volver a avisar de esta versión concreta. */
   on('updates:skip', (version) => store.updateSettings('updates', { skippedVersion: version }));
+
+  /** Descarga e instala la versión que se encontró en la última comprobación. */
+  on('updates:install', () => installUpdate({ logger, getWindow }));
 
   /** Abre la página de la release o el archivo que toca en el navegador. */
   on('updates:download', (url) => shell.openExternal(url));

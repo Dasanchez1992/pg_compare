@@ -43,6 +43,7 @@ header .brand .logo {
     align-items:center; justify-content:center; font-size:1rem;
 }
 header nav { display:flex; gap:.25rem; flex-wrap:wrap; }
+header #check-updates { margin-left:auto; }
 header nav a {
     color:var(--dim); text-decoration:none; font-weight:600; font-size:.92rem;
     padding:.42rem .85rem; border-radius:999px; border:1px solid transparent;
@@ -323,3 +324,9 @@ button.btn { font-family:inherit; }
 .msg-actions { display:flex; gap:.4rem; flex-wrap:wrap; margin-left:.75rem; }
 .msg-actions .btn { padding:.25rem .6rem; font-size:.8rem; }
 .msg strong { font-weight:700; }
+
+/* Barra de progreso de la descarga de una versión nueva. */
+.update-progress { display:inline-block; width:8rem; height:.4rem; margin-left:.75rem;
+    border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; vertical-align:middle; }
+.update-progress > span { display:block; height:100%; width:0; background:var(--accent);
+    transition:width .2s; }

@@ -95,8 +95,9 @@ function notify(text, kind = 'success', { sticky = false, html: asHtml = false }
   return el;
 }
 
+/** Limpia los avisos al cambiar de vista, salvo el de versión nueva. */
 function clearMessages() {
-  $('#messages').innerHTML = '';
+  for (const el of $$('#messages .msg:not(.update)')) el.remove();
 }
 
 // --- Enrutado -------------------------------------------------------------

@@ -4,8 +4,8 @@
  * Aviso de versiones nuevas.
  *
  * Consulta la última release publicada en GitHub y, si es más nueva que la
- * instalada, devuelve con qué archivo actualizarse. No descarga ni instala
- * nada por su cuenta: la app enseña un aviso y quien decide es el usuario.
+ * instalada, devuelve con qué archivo actualizarse. La descarga y la
+ * instalación (electron/installer.js) solo ocurren cuando el usuario lo pide.
  *
  * Es la única conexión que hace la aplicación fuera de las bases de datos
  * registradas, y se puede desactivar desde el menú Ayuda.
@@ -59,12 +59,24 @@ const ASSET_PREFERENCE = {
   linux: [/\.appimage$/i, /\.deb$/i],
 };
 
-/** Elige el archivo descargable que corresponde al sistema. */
-function pickAsset(assets, platform) {
+// Qué archivo sirve para reemplazar cada forma de instalación: el portable
+// se actualiza con otro portable, la AppImage con otra AppImage, etc.
+const ASSET_BY_INSTALL = {
+  nsis: [/setup.*\.exe$/i],
+  portable: [/^(?!.*setup).*\.exe$/i],
+  appimage: [/\.appimage$/i],
+  deb: [/\.deb$/i],
+};
+
+/**
+ * Elige el archivo descargable que corresponde al sistema o, si se sabe,
+ * a la forma en que está instalada la app (`install`).
+ */
+function pickAsset(assets, platform, install = null) {
   const candidates = (assets || []).filter((a) => a && a.name && a.browser_download_url
     && !/\.(blockmap|yml|yaml|sha512)$/i.test(a.name));
 
-  for (const pattern of ASSET_PREFERENCE[platform] || []) {
+  for (const pattern of ASSET_BY_INSTALL[install] || ASSET_PREFERENCE[platform] || []) {
     const found = candidates.find((a) => pattern.test(a.name));
     if (found) {
       return { name: found.name, url: found.browser_download_url, size: found.size || 0 };
@@ -100,6 +112,7 @@ async function checkForUpdate({
   repo,
   currentVersion,
   platform = process.platform,
+  install = null,
   fetchImpl = globalThis.fetch,
 }) {
   if (!repo) throw new Error('No se sabe en qué repositorio buscar las versiones.');
@@ -117,7 +130,7 @@ async function checkForUpdate({
     url: release.html_url,
     notes: release.body || '',
     publishedAt: release.published_at || null,
-    asset: pickAsset(release.assets, platform),
+    asset: pickAsset(release.assets, platform, install),
   };
 }
 

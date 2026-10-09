@@ -179,11 +179,22 @@ hay, aparece un aviso arriba con el archivo que corresponde a tu sistema
 a las novedades y un **Ahora no** que silencia esa versión concreta. Si la
 ventana no está a la vista, además sale una notificación del sistema.
 
-Descargar e instalar lo decides tú: la app no se actualiza sola ni sustituye
-archivos por su cuenta.
+Con **Descargar e instalar** la app se actualiza sola, según cómo la
+tengas instalada:
 
-Desde **Ayuda** puedes lanzar la comprobación a mano (*Buscar
-actualizaciones…*) o desactivarla del todo (*Avisarme de versiones nuevas*).
+| Instalación | Qué hace |
+| --- | --- |
+| Instalador de Windows | Ejecuta el instalador nuevo en silencio y vuelve a abrir la app. |
+| Portable de Windows | Guarda el `.exe` nuevo junto al actual y abre ese. |
+| AppImage | Reemplaza el archivo `.AppImage` y vuelve a abrir la app. |
+| `.deb` | Abre el paquete con el instalador del sistema (pide contraseña). |
+
+Nunca lo hace por su cuenta: la comprobación periódica solo avisa. El botón
+**Verificar actualizaciones** de la cabecera comprueba en el momento y, si
+hay una versión nueva, la descarga e instala directamente.
+
+Desde **Ayuda** también puedes lanzar la comprobación (*Buscar
+actualizaciones…*) o desactivar el aviso (*Avisarme de versiones nuevas*).
 Es la única conexión que hace la aplicación fuera de tus bases de datos: una
 consulta de lectura a la API pública de GitHub, sin enviar ningún dato tuyo.
 Usa la pila de red de Chromium, así que respeta el proxy y los certificados
