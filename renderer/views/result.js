@@ -91,6 +91,13 @@
               Desmarcar los ocultos</button>
           </p>
 
+          <p class="notice" id="confirm-generate" hidden>
+            <span id="confirm-generate-text"></span>
+            <button type="button" class="btn sm" id="gen-visible"></button>
+            <button type="button" class="btn secondary sm" id="gen-all"></button>
+            <button type="button" class="btn secondary sm" id="gen-cancel">Cancelar</button>
+          </p>
+
           <div class="grid-wrap">
             <table class="grid" id="grid">
               <thead>
@@ -216,6 +223,8 @@
           cabecera.indeterminate = marcadasVisibles > 0 && marcadasVisibles < visibles.length;
 
           $('#only-filtered', root).hidden = !conFiltro;
+          // La pregunta de "Generar script" deja de valer si cambia la selección.
+          $('#confirm-generate', root).hidden = true;
 
           const aviso = $('#hidden-selected', root);
           aviso.hidden = ocultasMarcadas === 0;
@@ -318,8 +327,8 @@
         });
 
         // --- Generar el script ------------------------------------------
-        $('#generate', root).addEventListener('click', async (event) => {
-          const button = event.currentTarget;
+        const generate = async () => {
+          const button = $('#generate', root);
           const selectedIds = checkedRows().map((tr) => tr.dataset.id);
           if (selectedIds.length === 0) {
             notify('Marca al menos un cambio para generar el script.', 'error');
@@ -340,7 +349,36 @@
           } finally {
             refreshSelection();
           }
+        };
+
+        // Si el filtro esconde cambios marcados, se pregunta antes: lo normal
+        // al filtrar y marcar un par de filas es querer solo esas.
+        $('#generate', root).addEventListener('click', () => {
+          const marcadas = checkedRows().length;
+          const visibles = visibleRows().filter((tr) => boxOf(tr).checked).length;
+          const ocultas = marcadas - visibles;
+          if (ocultas === 0) {
+            generate();
+            return;
+          }
+
+          $('#hidden-selected', root).hidden = true;
+          $('#confirm-generate-text', root).textContent = `Tienes ${visibles} cambio(s) `
+            + `marcado(s) a la vista y otros ${ocultas} que el filtro esconde. `
+            + '¿Cuáles van al script?';
+          const soloVisibles = $('#gen-visible', root);
+          soloVisibles.textContent = `Solo los ${visibles} a la vista`;
+          soloVisibles.disabled = visibles === 0;
+          $('#gen-all', root).textContent = `Todos los marcados (${marcadas})`;
+          $('#confirm-generate', root).hidden = false;
         });
+
+        $('#gen-visible', root).addEventListener('click', () => {
+          for (const tr of rowsEls) if (!isVisible(tr)) boxOf(tr).checked = false;
+          generate();
+        });
+        $('#gen-all', root).addEventListener('click', generate);
+        $('#gen-cancel', root).addEventListener('click', refreshSelection);
 
         $('#copy-script', root).addEventListener('click', async (event) => {
           const button = event.currentTarget;
