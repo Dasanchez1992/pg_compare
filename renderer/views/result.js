@@ -596,28 +596,28 @@
       target="_blank" rel="noreferrer" title="${pr.title}">${pr.ref}</a>${
       pr.truncated ? ' (recortado)' : ''}`));
 
+    const tokens = (usage.input || 0) + (usage.cacheRead || 0) + (usage.cacheWrite || 0)
+      + (usage.output || 0);
+
+    // Primero lo que hay que saber (qué se aplica y qué vigilar); el detalle
+    // por PR queda plegado.
     return html`
       <div class="ai-result">
-        <p class="muted">Análisis del ${formatDate(a.createdAt)} con ${a.model} sobre ${prs}
+        <p class="muted">${formatDate(a.createdAt)} · ${a.model} · ${prs}
           · <strong>${a.included.length}</strong> a aplicar
           · <strong>${a.review.length}</strong> a revisar
           · ${descartadas} descartadas
-          · tokens: ${usage.input} de entrada, ${usage.cacheRead} de caché, ${usage.output} de salida</p>
+          ${a.parts > 1 ? raw(html`· <span title="Con varias partes no se calcula lo esperado y no encontrado.">en ${a.parts} partes</span>`) : ''}
+          · <span title="${usage.input} de entrada, ${usage.cacheRead} leídos de caché, ${usage.cacheWrite} escritos en caché, ${usage.output} de salida">${tokens.toLocaleString('es')} tokens</span></p>
         ${a.warnings.map((warning) => raw(html`<p class="notice">⚠ ${warning}</p>`))}
 
-        <div class="toolbar">
+        <div class="ai-summary">${a.summary}</div>
+
+        <div class="toolbar" style="margin-top:.85rem;">
           <button type="button" class="btn sm" id="ai-mark">☑ Marcar solo lo que eligió la IA</button>
           <button type="button" class="btn secondary sm" id="ai-script">📄 Ver script</button>
           <button type="button" class="btn secondary sm" id="ai-copy">📋 Copiar análisis</button>
         </div>
-
-        <h3>Resumen</h3>
-        <div class="ai-summary">${a.summary}</div>
-
-        ${a.prSummaries.length ? raw(html`
-          <h3>Qué cambia cada PR en la base</h3>
-          <ul class="ai-list">${a.prSummaries.map((pr) => raw(html`
-            <li><strong>${pr.ref}</strong>: <span class="ai-pre">${pr.dbChanges}</span></li>`))}</ul>`) : ''}
 
         <h3>A aplicar (${a.included.length})</h3>
         ${a.included.length
@@ -625,17 +625,22 @@
           : raw('<p class="muted">La IA no encontró diferencias que expliquen estos PRs.</p>')}
 
         ${a.review.length ? raw(html`
-          <h3>A revisar (${a.review.length})</h3>
-          <p class="muted">No entran en el script: márcalas en la grilla si corresponden.</p>
+          <h3>A revisar (${a.review.length}) <span class="muted">· no entran en el script</span></h3>
           ${tabla(a.review, false)}`) : ''}
+
+        ${a.risks.length ? raw(html`<h3>Riesgos</h3>${lista(a.risks)}`) : ''}
 
         ${a.missing.length ? raw(html`
           <h3>Esperado y no encontrado (${a.missing.length})</h3>
-          <p class="muted">Cambios que los PRs deberían producir y que no aparecen entre las
-            diferencias: puede que BD1 ya los tenga o que BD2 no tenga el PR aplicado.</p>
+          <p class="muted">BD1 ya los tiene o BD2 no tiene el PR aplicado.</p>
           ${lista(a.missing.map((m) => `${m.pr} · ${m.object}: ${m.note}`))}`) : ''}
 
-        ${a.risks.length ? raw(html`<h3>Riesgos</h3>${lista(a.risks)}`) : ''}
+        ${a.prSummaries.length ? raw(html`
+          <details class="ai-more">
+            <summary>Cambios en la base por PR</summary>
+            <ul class="ai-list">${a.prSummaries.map((pr) => raw(html`
+              <li><strong>${pr.ref}</strong>: <span class="ai-pre">${pr.dbChanges}</span></li>`))}</ul>
+          </details>`) : ''}
       </div>`;
   }
 
@@ -656,12 +661,13 @@
       '',
       ...seccion('Avisos:', a.warnings.map((w) => `- ${w}`)),
       'Resumen:', a.summary, '',
-      ...seccion('Qué cambia cada PR:', a.prSummaries.map((pr) => `- ${pr.ref}: ${pr.dbChanges}`)),
       `A aplicar (${a.included.length}):`, ...a.included.map(linea), '',
       ...seccion(`A revisar (${a.review.length}):`, a.review.map(linea)),
+      ...seccion('Riesgos:', a.risks.map((r) => `- ${r}`)),
       ...seccion('Esperado y no encontrado:',
         a.missing.map((m) => `- ${m.pr} · ${m.object}: ${m.note}`)),
-      ...seccion('Riesgos:', a.risks.map((r) => `- ${r}`)),
+      ...seccion('Cambios en la base por PR:',
+        a.prSummaries.map((pr) => `- ${pr.ref}: ${pr.dbChanges}`)),
     ].join('\n').trim();
   }
 

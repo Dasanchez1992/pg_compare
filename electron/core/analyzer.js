@@ -32,6 +32,17 @@ const BODY_CHARS = 4000;
 // se repite sin él.
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
+// Cómo escribir la respuesta. Lo lee alguien que quiere saber qué se aplica y
+// si hay algo que vigilar, no el razonamiento completo.
+const BREVITY = `Responde en español y sé breve.
+- "summary": de 1 a 3 frases en texto plano, sin listas ni markdown: qué aplica cada PR en la base. No enumeres lo que descartas; como mucho di cuántas diferencias son ajenas a los PRs.
+- "prs": por cada PR, una línea con sus cambios de estructura, por ejemplo "product_image.is_main_image (boolean)".
+- "included": el motivo en una frase corta que cite el campo o el archivo, por ejemplo "is_main_image = fields.Boolean en models/product_image.py".
+- "review": el motivo de la duda en una frase.
+- "missing": una frase por cambio esperado que no aparece.
+- "risks": como mucho 3, y solo riesgos concretos de aplicar lo incluido (NOT NULL sobre tablas con datos, cambios de tipo, bloqueos, datos que habría que migrar). Nada sobre lo que se descarta. Si no hay ninguno real, déjalo vacío. No repitas lo que ya dice el resumen.
+- No menciones en qué parte de la comparación estás ni comentes el propio análisis.`;
+
 const SYSTEM_PROMPT = `Eres un DBA experto en PostgreSQL y en Odoo.
 
 Recibes:
@@ -66,12 +77,7 @@ Reglas de selección:
 - Usa únicamente ids que aparezcan en la lista. No inventes ids.
 - Si un cambio del PR debería producir una diferencia que NO aparece en la lista, anótalo en "missing": puede ser que BD1 ya lo tenga o que BD2 no tenga el PR aplicado.
 
-Responde en español.
-- "summary": análisis en texto plano, sin markdown salvo guiones para listas. Qué cambia cada PR en la base, qué diferencias se aplican y qué riesgos ves (NOT NULL sobre tablas con datos, cambios de tipo, borrados, datos que habría que migrar).
-- "prs": por cada PR, qué cambios de estructura implica.
-- "included": las diferencias a aplicar, con el PR que las explica y el motivo concreto.
-- "review": las dudosas, con el motivo de la duda.
-- "missing" y "risks": como se explicó arriba.`;
+${BREVITY}`;
 
 const RESULT_SCHEMA = {
   type: 'object',
@@ -122,6 +128,25 @@ const RESULT_SCHEMA = {
   required: ['summary', 'prs', 'included', 'review', 'missing', 'risks'],
   additionalProperties: false,
 };
+
+// Cuando la comparación se reparte en partes, cada una escribe su resumen y
+// sus riesgos. Una última petición, corta y sin el código de los PRs, los une.
+const JOIN_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: RESULT_SCHEMA.properties.summary,
+    prs: RESULT_SCHEMA.properties.prs,
+    risks: RESULT_SCHEMA.properties.risks,
+  },
+  required: ['summary', 'prs', 'risks'],
+  additionalProperties: false,
+};
+
+const JOIN_PROMPT = `Eres un DBA experto en PostgreSQL y en Odoo.
+
+Una comparación de dos bases se analizó por partes contra unos Pull Requests de Odoo, y cada parte escribió su propio resumen, sus cambios por PR y sus riesgos. Te paso la selección final y lo que escribió cada parte. Únelo en un único resultado, sin repeticiones ni contradicciones. Lo que una parte dijo de diferencias que no veía (por ejemplo, "esta parte no contiene el cambio del PR") ya no vale: guíate por la selección final.
+
+${BREVITY}`;
 
 /** Recorta un texto largo dejando constancia de que se recortó. */
 function clip(text, max, marker = '\n[… recortado …]') {
@@ -247,6 +272,47 @@ function buildRequest({ model, run, context, rows, part, parts }) {
   };
 }
 
+/** Petición que une el resumen de las partes en uno solo. */
+function buildJoinRequest({ model, prs, results, merged, rows }) {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const item = (entry) => {
+    const row = byId.get(entry.id);
+    const name = row.table === row.name ? row.name : `${row.table}.${row.name}`;
+    return `- ${row.type} ${row.status}: ${name}. ${entry.reason}`;
+  };
+  const descartadas = rows.length - merged.included.length - merged.review.length;
+
+  return {
+    model,
+    max_tokens: 8000,
+    system: JOIN_PROMPT,
+    output_config: {
+      effort: 'low',
+      format: { type: 'json_schema', schema: JOIN_SCHEMA },
+    },
+    messages: [{
+      role: 'user',
+      content: [
+        '## PRs',
+        ...prs.map((pr) => `- ${pr.ref}: ${pr.title}`),
+        '',
+        `## Se aplican (${merged.included.length})`,
+        ...merged.included.map(item),
+        '',
+        `## A revisar (${merged.review.length})`,
+        ...merged.review.map(item),
+        '',
+        `Las otras ${descartadas} diferencias son ajenas a los PRs.`,
+        '',
+        '## Lo que escribió cada parte',
+        JSON.stringify(results.map(({ summary, prs: porPr, risks }) => ({
+          summary, prs: porPr, risks,
+        })), null, 1),
+      ].join('\n'),
+    }],
+  };
+}
+
 /** ¿La API rechazó el respaldo de modelo (beta no disponible para esta cuenta)? */
 function isFallbackRejection(error) {
   return Boolean(error) && error.status === 400 && /fallback|beta/i.test(error.message || '');
@@ -327,11 +393,6 @@ function mergeResults(results, rows) {
     warnings.push(`La IA citó ${unknown.size} id(s) que no existen en la comparación; `
       + 'se ignoraron.');
   }
-  if (results.length > 1) {
-    warnings.push(`La comparación se analizó en ${results.length} partes: la lista de cambios `
-      + 'esperados que no aparecen ("missing") no se calcula.');
-  }
-
   return {
     summary,
     prSummaries: [...prs].map(([ref, dbChanges]) => ({ ref, dbChanges })),
@@ -423,6 +484,23 @@ async function analyze({
   }
 
   const merged = mergeResults(results, run.rows);
+  if (results.length > 1) {
+    onProgress('Claude está uniendo el resultado de las partes…');
+    try {
+      const message = await callClaude(client, buildJoinRequest({
+        model, prs, results, merged, rows: run.rows,
+      }), { signal });
+      addUsage(usage, message.usage);
+      const joined = readResult(message);
+      merged.summary = joined.summary;
+      merged.prSummaries = joined.prs;
+      merged.risks = joined.risks;
+    } catch (error) {
+      if (signal && signal.aborted) throw error;
+      // Sin la unión queda el resumen de cada parte: la selección vale igual.
+      merged.warnings.push('No se pudo unir el resumen de las partes: se muestra el de cada una.');
+    }
+  }
   const includedIds = new Set(merged.included.map((item) => item.id));
   if (context.truncated.length) {
     merged.warnings.push(`El código de ${context.truncated.join(', ')} no cupo entero y se `
@@ -450,6 +528,7 @@ async function analyze({
 
 module.exports = {
   analyze,
+  buildJoinRequest,
   buildRequest,
   callClaude,
   changesSchema,

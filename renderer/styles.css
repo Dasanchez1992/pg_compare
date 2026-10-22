@@ -347,3 +347,7 @@ button.btn { font-family:inherit; }
 .ai-table tbody tr { cursor:pointer; }
 .ai-table tbody tr:hover { background:var(--accent-soft); }
 .ai-table td.det { color:var(--dim); }
+.ai-result h3 .muted { font-weight:400; }
+.ai-more { margin-top:1.1rem; }
+.ai-more summary { cursor:pointer; color:var(--dim); font-weight:600; font-size:.92rem; }
+.ai-more summary:hover { color:var(--text); }

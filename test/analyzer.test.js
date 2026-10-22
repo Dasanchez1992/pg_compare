@@ -173,21 +173,53 @@ test('si la cuenta no admite el respaldo de modelo, repite sin él', async () =>
   assert.equal(client.calls[1].params.fallbacks, undefined);
 });
 
-test('las comparaciones grandes se reparten en partes', async () => {
+test('las comparaciones grandes se reparten en partes y se unen en un solo resumen', async () => {
   const client = clienteFalso([
-    respuesta(resultado({ included: [resultado().included[1]] })),
-    respuesta(resultado({ included: [resultado().included[0]] })),
+    respuesta(resultado({
+      summary: 'Parte 1: está la FK.', included: [resultado().included[1]],
+      risks: ['La parte 2 no se vio.'],
+    })),
+    respuesta(resultado({ summary: 'Parte 2: está el RUT.', included: [resultado().included[0]] })),
+    respuesta({
+      summary: 'El PR agrega el RUT y la relación con el documento del SII.',
+      prs: [{ ref: 'acme/odoo-int#7', dbChanges: 'res_partner.x_rut; FK de account_move' }],
+      risks: [],
+    }),
   ]);
   const analysis = await analyze({
     client, model: 'm', run: comparacion(), prs: [PR], rowsPerRequest: 2,
   });
 
-  assert.equal(client.calls.length, 2);
+  assert.equal(client.calls.length, 3);
   assert.match(client.calls[1].params.messages[0].content[1].text, /Esta es la parte 2/);
   assert.equal(analysis.parts, 2);
   assert.equal(analysis.included.length, 2);
-  assert.ok(analysis.warnings.some((w) => /2 partes/.test(w)));
-  assert.equal(analysis.usage.input, 2000);
+  assert.equal(analysis.usage.input, 3000);
+
+  // La unión no reenvía el código de los PRs, solo lo elegido y lo que dijo cada parte.
+  const union = client.calls[2].params;
+  assert.equal(union.output_config.effort, 'low');
+  assert.match(union.messages[0].content, /## Se aplican \(2\)/);
+  assert.match(union.messages[0].content, /Parte 1: está la FK/);
+  assert.doesNotMatch(union.messages[0].content, /fields\.Char\('RUT'\)/);
+  assert.doesNotMatch(union.messages[0].content, /## Pull Requests/);
+  assert.equal(analysis.summary, 'El PR agrega el RUT y la relación con el documento del SII.');
+  assert.deepEqual(analysis.risks, []);
+});
+
+test('si falla la unión de las partes, queda el resumen de cada una', async () => {
+  const client = clienteFalso([
+    respuesta(resultado({ summary: 'Uno.' })),
+    respuesta(resultado({ summary: 'Dos.' })),
+    respuesta(resultado(), { stop_reason: 'max_tokens' }),
+  ]);
+  const analysis = await analyze({
+    client, model: 'm', run: comparacion(), prs: [PR], rowsPerRequest: 2,
+  });
+
+  assert.match(analysis.summary, /Parte 1 de 2:\nUno\./);
+  assert.ok(analysis.warnings.some((w) => /No se pudo unir/.test(w)));
+  assert.equal(analysis.included.length, 2);
 });
 
 test('una negativa o una respuesta cortada se explican', () => {
