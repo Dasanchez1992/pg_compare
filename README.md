@@ -7,7 +7,10 @@ necesario para igualar BD1 con BD2.
 Todo se ejecuta en la máquina de quien compara: no hay servidor, ni servicio
 web, ni nada que instalar aparte de la propia aplicación. Se conecta a las
 bases de datos que registres y, si lo dejas activado, consulta GitHub para
-avisarte de versiones nuevas: nada más, y nada de tus datos sale del equipo.
+avisarte de versiones nuevas. Solo cuando pides un **análisis con IA** lee
+Pull Requests en GitHub y envía las diferencias a la API de Claude (ver
+[Análisis con IA](#análisis-con-ia-prs-de-odoo)); los datos de las tablas
+nunca salen del equipo.
 
 ## Qué compara
 
@@ -150,7 +153,62 @@ Cada comparación se guarda en el **Historial**: puedes volver a abrirla
 mismas bases para obtener un resultado fresco, o eliminarla.
 
 Atajos: `Ctrl/Cmd+N` nueva conexión, `Ctrl/Cmd+D` nueva comparación,
-`Ctrl/Cmd+S` guardar el script, `Ctrl/Cmd+1..4` para moverse entre secciones.
+`Ctrl/Cmd+S` guardar el script, `Ctrl/Cmd+,` configuración y
+`Ctrl/Cmd+1..5` para moverse entre secciones.
+
+## Análisis con IA (PRs de Odoo)
+
+Cuando la base de referencia (BD2) trae, además de lo que quieres pasar,
+muchos cambios de otros desarrollos, la comparación saca todo mezclado y
+alguien tiene que separar a mano lo que corresponde. El análisis con IA hace
+ese filtro: le das los Pull Requests de Odoo que quieres aplicar y Claude deja
+marcadas solo las diferencias que esos PRs explican.
+
+1. En **Configuración** guarda la **clave de la API de Claude** y elige el
+   modelo (por defecto Claude Opus 5.5, el más preciso para este filtro). Si
+   los repositorios son privados, guarda también tu **usuario y token de
+   GitHub** (token personal con lectura de *Pull requests* y *Contents*). El
+   **repositorio por defecto** es opcional: con él basta escribir `#123`.
+   **Probar clave** y **Probar GitHub** validan los datos sin gastar tokens.
+2. Abre una comparación y, en **Análisis con IA**, escribe los PRs, uno por
+   línea: `https://github.com/empresa/repo/pull/123`, `empresa/repo#123` o
+   `#123`.
+3. Pulsa **Analizar con IA**. La app lee los PRs en GitHub y le manda a Claude
+   su código y la lista de diferencias. Claude conoce cómo Odoo traduce el
+   código a la base (`_name` → tabla, campos almacenados → columnas, Many2one
+   → columna + clave foránea, Many2many → tabla `_rel`, `index=True`,
+   `_sql_constraints`, vistas de `init()`, migraciones, campos `x_` definidos
+   en XML…) y responde qué diferencias aplicar y por qué.
+
+El resultado:
+
+- **El script ya generado** con la selección de la IA. Cada sentencia lleva
+  delante, comentado, el PR y el motivo por el que entró. Se guarda como
+  siempre con **Guardar .sql**.
+- **El análisis**: un resumen, qué cambia cada PR en la base, la lista de lo
+  que se aplica (con su PR y motivo), lo **dudoso** —que no entra en el
+  script y queda para revisar—, lo **esperado y no encontrado** (cambios que
+  el PR debería producir y no aparecen: o BD1 ya los tiene o BD2 no tiene el
+  PR aplicado) y los **riesgos** (NOT NULL sobre tablas con datos, cambios de
+  tipo…). **Copiar análisis** lo deja en el portapapeles en texto plano.
+- En la grilla aparece la columna **IA** (Aplicar / Revisar / —), con su
+  filtro, y la selección queda como la dejó la IA: se puede retocar a mano
+  y volver a generar el script.
+
+Por seguridad la IA **elige filas, nunca escribe SQL**: el script sigue
+saliendo del catálogo de PostgreSQL, igual que sin IA. Lo que la IA no
+menciona queda fuera y lo que marca como dudoso tampoco entra. Además la app
+comprueba las dependencias de lo elegido y avisa si, por ejemplo, una clave
+foránea apunta a una tabla nueva que quedó fuera, o un trigger usa una
+función nueva que no se incluyó.
+
+Qué se envía a Anthropic: la lista de diferencias (nombres de objetos, tipos
+y, para vistas, funciones y triggers, su definición) y, de cada PR, el
+título, la descripción y el diff de los archivos que pueden cambiar la base
+(Python, SQL y XML que definen modelos o campos); del resto de archivos solo
+el nombre. **Nunca los datos de las tablas.** Si el código de los PRs es muy
+grande se recorta y el análisis lo avisa. Cada análisis consume tokens de la
+cuenta de la clave; el resultado muestra cuántos.
 
 ## Cómo está hecha
 
@@ -158,6 +216,8 @@ Atajos: `Ctrl/Cmd+N` nueva conexión, `Ctrl/Cmd+D` nueva comparación,
 electron/            proceso principal (Node): ventana, menú y acceso a datos
   core/diff.js       comparación de esquemas y generación del script ALTER
   core/introspect.js lectura del catálogo de PostgreSQL (driver `pg`)
+  core/analyzer.js   análisis con IA: filtra las diferencias según los PRs
+  core/github.js     lectura de Pull Requests de GitHub
   core/store.js      almacén local en JSON (conexiones, proyectos, historial)
   core/secrets.js    cifrado de contraseñas con el llavero del sistema
   ipc.js             operaciones que la interfaz puede pedir
@@ -195,8 +255,10 @@ hay una versión nueva, la descarga e instala directamente.
 
 Desde **Ayuda** también puedes lanzar la comprobación (*Buscar
 actualizaciones…*) o desactivar el aviso (*Avisarme de versiones nuevas*).
-Es la única conexión que hace la aplicación fuera de tus bases de datos: una
-consulta de lectura a la API pública de GitHub, sin enviar ningún dato tuyo.
+Es la única conexión que la aplicación hace por su cuenta fuera de tus bases
+de datos: una consulta de lectura a la API pública de GitHub, sin enviar
+ningún dato tuyo (el análisis con IA también sale a la red, pero solo cuando
+lo pides).
 Usa la pila de red de Chromium, así que respeta el proxy y los certificados
 configurados en el sistema.
 
@@ -208,8 +270,9 @@ configurados en el sistema.
 | macOS | `~/Library/Application Support/pg-compare-desktop` |
 | Linux | `~/.config/pg-compare-desktop` |
 
-Contiene `data.json` (conexiones, proyectos, ajustes e índice del historial),
-`runs/<id>.json` (el resultado de cada comparación), `window-state.json` y
+Contiene `data.json` (conexiones, proyectos, ajustes —incluidas la clave de
+Claude y el token de GitHub— e índice del historial), `runs/<id>.json` (el
+resultado de cada comparación y su análisis con IA), `window-state.json` y
 `logs/app.log`. Se abre desde **Archivo → Abrir carpeta de datos**.
 Desinstalar la aplicación no borra esa carpeta.
 
@@ -312,9 +375,10 @@ compila en Windows y en Linux:
 
 ## Notas
 
-- Las contraseñas se guardan cifradas con el llavero del sistema (Keychain,
-  DPAPI, libsecret/kwallet). Si el sistema no ofrece llavero, la aplicación
-  lo avisa en la barra inferior y las guarda en texto plano.
+- Las contraseñas, la clave de Claude y el token de GitHub se guardan
+  cifrados con el llavero del sistema (Keychain, DPAPI, libsecret/kwallet).
+  Si el sistema no ofrece llavero, la aplicación lo avisa en la barra
+  inferior y los guarda en texto plano.
 - Marca **Conectar con SSL** en la conexión si el servidor exige cifrado.
 - Solo se compara el esquema indicado en cada conexión. Lo que no se compara
   (tipos RANGE, extensiones y permisos) está en *Qué no compara todavía*.

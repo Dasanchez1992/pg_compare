@@ -875,9 +875,13 @@ function shared(a, b) {
 /**
  * Arma el script SQL con solo los cambios seleccionados, respetando el orden
  * canónico de `sqlById`. `schema` es el esquema de BD1: el script fija el
- * search_path para que las sentencias (sin calificar) apliquen ahí.
+ * search_path para que las sentencias (sin calificar) apliquen ahí. `notes`
+ * son líneas que se añaden, comentadas, a la cabecera, y `commentsById` un
+ * comentario que precede a la sentencia de cada cambio (el porqué).
  */
-function buildScript({ db1Name, db2Name, sqlById, selectedIds, schema = 'public' }) {
+function buildScript({
+  db1Name, db2Name, sqlById, selectedIds, schema = 'public', notes = [], commentsById = {},
+}) {
   const selected = new Set(selectedIds);
   const lines = [
     '-- ============================================================',
@@ -887,6 +891,8 @@ function buildScript({ db1Name, db2Name, sqlById, selectedIds, schema = 'public'
     `-- Esquema: ${schema}`,
     '-- Solo se incluyen los cambios seleccionados.',
     '-- Las sentencias DROP van comentadas por seguridad.',
+    // Notas de quien hizo la selección (por ejemplo, el análisis con IA).
+    ...notes.map((note) => `-- ${String(note).replace(/\s*\n\s*/g, ' ')}`),
     '-- ============================================================',
     'BEGIN;',
     '',
@@ -900,6 +906,7 @@ function buildScript({ db1Name, db2Name, sqlById, selectedIds, schema = 'public'
   let included = 0;
   for (const [id, sql] of Object.entries(sqlById)) {
     if (selected.has(id)) {
+      if (commentsById[id]) lines.push(`-- ${String(commentsById[id]).replace(/\s*\n\s*/g, ' ')}`);
       lines.push(sql);
       included += 1;
     }

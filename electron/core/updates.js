@@ -7,8 +7,9 @@
  * instalada, devuelve con qué archivo actualizarse. La descarga y la
  * instalación (electron/installer.js) solo ocurren cuando el usuario lo pide.
  *
- * Es la única conexión que hace la aplicación fuera de las bases de datos
- * registradas, y se puede desactivar desde el menú Ayuda.
+ * Es la única conexión que hace la aplicación por su cuenta fuera de las
+ * bases de datos registradas, y se puede desactivar desde el menú Ayuda (el
+ * análisis con IA también sale a la red, pero solo cuando el usuario lo pide).
  */
 
 const TIMEOUT_MS = 8000;

@@ -47,6 +47,24 @@ contextBridge.exposeInMainWorld('api', {
 
   confirm: (payload) => call('dialog:confirm', payload),
 
+  settings: {
+    get: () => call('settings:get'),
+    save: (payload) => call('settings:save', payload),
+    testAi: (payload) => call('settings:test-ai', payload),
+    testGithub: (payload) => call('settings:test-github', payload),
+  },
+
+  ai: {
+    analyze: (payload) => call('ai:analyze', payload),
+    cancel: () => call('ai:cancel'),
+    /** Avisos de progreso del análisis (lectura de PRs, llamada a Claude). */
+    onProgress: (callback) => {
+      const listener = (_event, message) => callback(message);
+      ipcRenderer.on('ai:progress', listener);
+      return () => ipcRenderer.removeListener('ai:progress', listener);
+    },
+  },
+
   updates: {
     check: () => call('updates:check'),
     skip: (version) => call('updates:skip', version),

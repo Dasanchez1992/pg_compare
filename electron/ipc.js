@@ -13,8 +13,11 @@
 const fs = require('fs/promises');
 const path = require('path');
 const { app, dialog, ipcMain, net, shell } = require('electron');
+const Anthropic = require('@anthropic-ai/sdk');
 
+const { analyze } = require('./core/analyzer');
 const { compare, buildScript } = require('./core/diff');
+const { parsePrRefs, fetchPullRequest, testGithub } = require('./core/github');
 const { introspect, testConnection } = require('./core/introspect');
 const { checkForUpdate, repoFromPackage } = require('./core/updates');
 const installer = require('./installer');
@@ -29,6 +32,12 @@ const FIRST_CHECK_DELAY_MS = 8000;
 // llegue desde la interfaz.
 let latestUpdate = null;
 let installing = null;
+
+// Análisis con IA en curso, para poder cancelarlo.
+let analysisController = null;
+
+// Un análisis grande con esfuerzo alto puede tardar varios minutos.
+const AI_TIMEOUT_MS = 15 * 60 * 1000;
 
 /** Envuelve un handler para que nunca reviente el canal IPC. */
 function handler(fn, logger) {
@@ -53,6 +62,34 @@ async function appFetch(url, options) {
   } catch {
     return fetch(url, options);
   }
+}
+
+/** Cliente de la API de Claude, por la misma pila de red que el resto. */
+function anthropicClient(apiKey) {
+  return new Anthropic({ apiKey, fetch: appFetch, timeout: AI_TIMEOUT_MS });
+}
+
+/** Errores de la API de Claude en palabras del usuario. */
+function claudeError(error, model) {
+  if (error instanceof Anthropic.AuthenticationError) {
+    return new Error('Anthropic rechazó la clave de Claude: revísala en Configuración.');
+  }
+  if (error instanceof Anthropic.PermissionDeniedError) {
+    return new Error('La clave de Claude no tiene permiso para usar la API.');
+  }
+  if (error instanceof Anthropic.NotFoundError) {
+    return new Error(`El modelo ${model} no está disponible para esta clave.`);
+  }
+  if (error instanceof Anthropic.RateLimitError) {
+    return new Error('Se alcanzó el límite de uso de la API de Claude. Prueba en unos minutos.');
+  }
+  if (error instanceof Anthropic.APIConnectionError) {
+    return new Error('No se pudo conectar con la API de Claude. Revisa la conexión o el proxy.');
+  }
+  if (error instanceof Anthropic.APIError && error.status >= 500) {
+    return new Error(`La API de Claude respondió ${error.status}. Prueba de nuevo en un rato.`);
+  }
+  return error;
 }
 
 /**
@@ -233,6 +270,9 @@ function registerIpc({ store, cipher, logger, getWindow }) {
       sqlById: run.sqlById,
       selectedIds,
       schema: run.db1Schema,
+      // Si hubo análisis con IA, lo que eligió conserva su porqué.
+      commentsById: run.analysis ? Object.fromEntries(run.analysis.included
+        .map((item) => [item.id, `${item.pr}: ${item.reason}`])) : {},
     });
     return store.saveScript(id, script, selectedIds);
   });
@@ -260,6 +300,113 @@ function registerIpc({ store, cipher, logger, getWindow }) {
     await fs.writeFile(filePath, run.script, 'utf8');
     logger.info(`Script guardado en ${filePath}`);
     return { saved: true, path: filePath };
+  });
+
+  // --- Configuración de IA y GitHub ----------------------------------
+
+  on('settings:get', () => store.integrations());
+  on('settings:save', (payload) => store.saveIntegrations(payload));
+
+  /**
+   * Prueba la clave de Claude pidiendo los datos del modelo, que no gasta
+   * tokens. Si el campo se dejó vacío, usa la clave guardada.
+   */
+  on('settings:test-ai', async ({ apiKey, model } = {}) => {
+    const stored = store.aiConfig();
+    const key = String(apiKey || '').trim() || stored.apiKey;
+    const modelId = String(model || '').trim() || stored.model;
+    if (!key) return { ok: false, message: 'Escribe la clave de la API de Claude.' };
+    try {
+      const info = await anthropicClient(key).models.retrieve(modelId);
+      return { ok: true, message: `Clave válida · ${info.display_name || modelId} disponible.` };
+    } catch (error) {
+      return { ok: false, message: claudeError(error, modelId).message };
+    }
+  });
+
+  on('settings:test-github', ({ user, token } = {}) => {
+    const stored = store.githubConfig();
+    return testGithub({
+      user: String(user ?? stored.user).trim(),
+      token: String(token || '').trim() || stored.token,
+      fetchImpl: appFetch,
+    });
+  });
+
+  // --- Análisis con IA ------------------------------------------------
+
+  /**
+   * Lee los PRs, le pide a Claude que filtre las diferencias y deja el script
+   * armado con lo que eligió. Devuelve la comparación actualizada.
+   */
+  on('ai:analyze', async ({ id, prsText }, event) => {
+    if (analysisController) throw new Error('Ya hay un análisis en curso.');
+    const run = store.getRun(id);
+    if (!run) throw new Error('Esa comparación ya no existe.');
+    const ai = store.aiConfig();
+    if (!ai.apiKey) {
+      throw new Error('Falta la clave de Claude: configúrala en Configuración.');
+    }
+    const github = store.githubConfig();
+    const refs = parsePrRefs(prsText, github.defaultRepo);
+    if (!refs.length) throw new Error('Indica al menos un PR.');
+
+    const say = (message) => {
+      if (!event.sender.isDestroyed()) event.sender.send('ai:progress', message);
+    };
+
+    analysisController = new AbortController();
+    try {
+      const prs = [];
+      for (const ref of refs) {
+        say(`Leyendo ${ref.ref} en GitHub…`);
+        prs.push(await fetchPullRequest(ref, { token: github.token, fetchImpl: appFetch }));
+      }
+
+      logger.info(`Análisis con IA de la comparación ${run.id} contra ${refs.map((r) => r.ref).join(', ')}.`);
+      const analysis = await analyze({
+        client: anthropicClient(ai.apiKey),
+        model: ai.model,
+        run,
+        prs,
+        signal: analysisController.signal,
+        onProgress: say,
+      });
+      analysis.prsText = prsText;
+      const { usage } = analysis;
+      logger.info(`Análisis listo: ${analysis.included.length} a aplicar, `
+        + `${analysis.review.length} a revisar · tokens: ${usage.input} entrada, `
+        + `${usage.cacheRead} de caché, ${usage.output} salida.`);
+
+      store.saveAnalysis(run.id, analysis);
+      const selectedIds = analysis.included.map((item) => item.id);
+      const script = buildScript({
+        db1Name: run.db1Name,
+        db2Name: run.db2Name,
+        sqlById: run.sqlById,
+        selectedIds,
+        schema: run.db1Schema,
+        notes: [
+          `Selección hecha con IA (${ai.model}) a partir de: ${refs.map((r) => r.ref).join(', ')}.`,
+          `Incluye ${selectedIds.length} de ${run.totalChanges} diferencias. `
+            + 'Revisa el análisis en la aplicación antes de aplicarlo.',
+          ...analysis.warnings.map((warning) => `AVISO: ${warning}`),
+        ],
+        // Cada sentencia lleva delante el PR y el motivo por el que entró.
+        commentsById: Object.fromEntries(analysis.included
+          .map((item) => [item.id, `${item.pr}: ${item.reason}`])),
+      });
+      return store.saveScript(run.id, script, selectedIds);
+    } catch (error) {
+      if (analysisController.signal.aborted) throw new Error('Análisis cancelado.');
+      throw claudeError(error, ai.model);
+    } finally {
+      analysisController = null;
+    }
+  });
+
+  on('ai:cancel', () => {
+    if (analysisController) analysisController.abort();
   });
 
   /** Abre la carpeta del archivo recién guardado. */

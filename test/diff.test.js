@@ -1014,3 +1014,19 @@ test('una vista que lee de una materializada va después de ella', () => {
   assert.deepEqual(Object.keys(compare({ source, target: new Schema('ventas') }).sqlById),
     ['view_add:z_resumen', 'view_add:a_encima']);
 });
+
+test('buildScript añade las notas a la cabecera y el porqué delante de cada cambio', () => {
+  const script = buildScript({
+    db1Name: 'qa',
+    db2Name: 'prod',
+    sqlById: { a: 'ALTER TABLE "t" ADD COLUMN "x" text;', b: 'ALTER TABLE "t" ADD COLUMN "y" text;' },
+    selectedIds: ['a'],
+    notes: ['Selección hecha con IA.', 'AVISO: una\nnota en dos líneas'],
+    commentsById: { a: 'acme/odoo-int#7: campo x', b: 'no se usa' },
+  });
+
+  assert.match(script, /^-- Selección hecha con IA\.$/m);
+  assert.match(script, /^-- AVISO: una nota en dos líneas$/m);
+  assert.match(script, /-- acme\/odoo-int#7: campo x\nALTER TABLE "t" ADD COLUMN "x" text;/);
+  assert.doesNotMatch(script, /no se usa/);
+});

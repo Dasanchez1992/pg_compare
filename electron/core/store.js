@@ -17,6 +17,8 @@ const path = require('path');
 
 const VERSION = 1;
 
+const DEFAULT_AI_MODEL = 'claude-opus-5-5';
+
 /** Cifrador de paso: guarda el texto tal cual. Útil en pruebas. */
 const plainCipher = {
   encrypt: (text) => ({ enc: 'plain', value: text }),
@@ -25,9 +27,13 @@ const plainCipher = {
 
 function defaultSettings() {
   return {
-    // Aviso de versiones nuevas: la única conexión que hace la app fuera de
-    // las bases de datos registradas.
+    // Aviso de versiones nuevas: la única conexión que hace la app por su
+    // cuenta, fuera de las bases de datos registradas.
     updates: { enabled: true, skippedVersion: null, lastCheck: null },
+    // Análisis con IA: la clave de Anthropic y el acceso a GitHub. Los secretos
+    // se guardan cifrados (ver `cipher`) y nunca viajan a la interfaz.
+    ai: { model: DEFAULT_AI_MODEL, apiKey: null },
+    github: { user: '', token: null, defaultRepo: '' },
   };
 }
 
@@ -104,7 +110,79 @@ class Store {
   settings() {
     const stored = this.data.settings || {};
     const defaults = defaultSettings();
-    return { updates: { ...defaults.updates, ...(stored.updates || {}) } };
+    const merged = {};
+    for (const section of Object.keys(defaults)) {
+      merged[section] = { ...defaults[section], ...(stored[section] || {}) };
+    }
+    return merged;
+  }
+
+  /** Integraciones sin secretos: lo único que ve la interfaz. */
+  integrations() {
+    const { ai, github } = this.settings();
+    return {
+      ai: { model: ai.model, hasKey: Boolean(this.#secret(ai.apiKey)) },
+      github: {
+        user: github.user,
+        defaultRepo: github.defaultRepo,
+        hasToken: Boolean(this.#secret(github.token)),
+      },
+    };
+  }
+
+  /** Clave y modelo de Claude, con la clave descifrada. */
+  aiConfig() {
+    const { ai } = this.settings();
+    return { model: ai.model, apiKey: this.#secret(ai.apiKey) };
+  }
+
+  /** Usuario, token y repositorio por defecto de GitHub, con el token descifrado. */
+  githubConfig() {
+    const { github } = this.settings();
+    return {
+      user: github.user,
+      defaultRepo: github.defaultRepo,
+      token: this.#secret(github.token),
+    };
+  }
+
+  /**
+   * Guarda la configuración de IA y GitHub. Un secreto vacío conserva el que
+   * ya estaba; `clearAiKey` / `clearGithubToken` lo borran de verdad.
+   */
+  saveIntegrations(payload) {
+    const current = this.settings();
+    const text = (value) => String(value ?? '').trim();
+
+    const defaultRepo = text(payload.githubDefaultRepo);
+    if (defaultRepo && !/^[\w.-]+\/[\w.-]+$/.test(defaultRepo)) {
+      throw new Error('El repositorio por defecto debe ser "dueño/repositorio".');
+    }
+
+    let apiKey = current.ai.apiKey;
+    if (payload.clearAiKey) apiKey = null;
+    else if (text(payload.aiApiKey)) apiKey = this.cipher.encrypt(text(payload.aiApiKey));
+
+    let token = current.github.token;
+    if (payload.clearGithubToken) token = null;
+    else if (text(payload.githubToken)) token = this.cipher.encrypt(text(payload.githubToken));
+
+    this.data.settings = {
+      ...current,
+      ai: { model: text(payload.aiModel) || DEFAULT_AI_MODEL, apiKey },
+      github: { user: text(payload.githubUser), token, defaultRepo },
+    };
+    this.#save();
+    return this.integrations();
+  }
+
+  #secret(blob) {
+    if (!blob) return '';
+    try {
+      return this.cipher.decrypt(blob) || '';
+    } catch {
+      return '';
+    }
   }
 
   /** Cambia parte de los ajustes de una sección y devuelve el resultado. */
@@ -289,7 +367,7 @@ class Store {
   getRun(id) {
     const run = this.data.runs.find((r) => r.id === Number(id));
     if (!run) return null;
-    let payload = { rows: [], sqlById: {}, script: '', selectedIds: [] };
+    let payload = { rows: [], sqlById: {}, script: '', selectedIds: [], analysis: null };
     try {
       payload = { ...payload, ...readJson(this.#runFile(run.id)) };
     } catch { /* el archivo pesado se perdió: se muestra el índice igualmente */ }
@@ -339,6 +417,20 @@ class Store {
 
     run.hasScript = Boolean(script);
     run.selectedCount = selectedIds.length;
+    this.#save();
+    return this.getRun(run.id);
+  }
+
+  /** Guarda el análisis de IA junto al resultado de la comparación. */
+  saveAnalysis(id, analysis) {
+    const run = this.data.runs.find((r) => r.id === Number(id));
+    if (!run) throw new Error('Esa comparación ya no existe.');
+
+    const payload = readJson(this.#runFile(run.id));
+    payload.analysis = analysis;
+    writeJson(this.#runFile(run.id), payload);
+
+    run.hasAnalysis = Boolean(analysis);
     this.#save();
     return this.getRun(run.id);
   }
@@ -419,4 +511,4 @@ function normalizeConnection(payload) {
   };
 }
 
-module.exports = { Store, plainCipher, normalizeConnection };
+module.exports = { Store, plainCipher, normalizeConnection, DEFAULT_AI_MODEL };

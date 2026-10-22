@@ -5,12 +5,22 @@
   // Cambios que cuelgan de una tabla.
   const TABLE_CHILD_TYPES = new Set(['Columna', 'Índice', 'Constraint', 'Trigger', 'Partición']);
 
+  // Veredicto del análisis con IA en la columna "IA" de la grilla.
+  const AI_BADGE = {
+    aplicar: '<span class="badge b-ai">Aplicar</span>',
+    revisar: '<span class="badge b-chg">Revisar</span>',
+    descartado: '<span class="muted">—</span>',
+  };
+
   const {
     html, raw, notify, route, formatDate, highlight, copyText, $, $$,
   } = window.App;
 
   route('/historial/:id', async ({ params }) => {
-    const run = await window.api.runs.get(params.id);
+    const [run, integrations] = await Promise.all([
+      window.api.runs.get(params.id),
+      window.api.settings.get(),
+    ]);
     if (!run) throw new Error('Esa comparación ya no existe.');
 
     const cabecera = html`
@@ -40,6 +50,15 @@
     // marcado (el usuario desmarca lo que no quiera aplicar).
     const selected = new Set(run.hasScript ? run.selectedIds : run.rows.map((r) => r.id));
 
+    // Si hubo análisis con IA, qué decidió de cada fila.
+    const analysis = run.analysis || null;
+    const verdicts = new Map();
+    if (analysis) {
+      for (const item of analysis.included) verdicts.set(item.id, 'aplicar');
+      for (const item of analysis.review) verdicts.set(item.id, 'revisar');
+    }
+    const verdictOf = (id) => verdicts.get(id) || 'descartado';
+
     // Una tabla que existe en ambas bases no tiene fila propia: sus cambios
     // salen como columnas, índices, etc. Para que el filtro "Tabla" la
     // encuentre, cada uno de esos cambios hereda el estado de su tabla
@@ -56,13 +75,15 @@
       <tr data-id="${item.id}" data-name="${item.name.toLowerCase()}"
           data-table="${item.table.toLowerCase()}"
           data-type="${item.type}" data-status="${item.status}"
-          data-table-status="${tableStatusOf(item)}">
+          data-table-status="${tableStatusOf(item)}"
+          data-ai="${analysis ? verdictOf(item.id) : ''}">
         <td class="check-cell">
           <input type="checkbox" style="width:auto;" ${selected.has(item.id) ? raw('checked') : ''}>
         </td>
         <td>${item.name}</td>
         <td>${item.type}</td>
         <td><span class="badge ${item.statusClass}">${item.status}</span></td>
+        ${analysis ? raw(`<td>${AI_BADGE[verdictOf(item.id)]}</td>`) : ''}
         <td>${item.table}</td>
         <td><span class="muted det">${item.detail}</span></td>
       </tr>`));
@@ -70,6 +91,8 @@
     return {
       html: html`
         ${raw(cabecera)}
+
+        ${raw(aiCard(run, integrations))}
 
         <div class="card">
           <div class="toolbar">
@@ -105,6 +128,7 @@
                   <th style="width:2rem;"><input type="checkbox" id="check-header"
                       title="Marca o desmarca las filas que se ven ahora"></th>
                   <th>Nombre</th><th>Tipo</th><th>Estado</th>
+                  ${analysis ? raw('<th title="Qué decidió el análisis con IA">IA</th>') : ''}
                   <th>Tabla / Esquema</th><th>Detalle</th>
                 </tr>
                 <tr class="filters">
@@ -130,6 +154,14 @@
                       <option>Sobra</option><option>Manual</option>
                     </select>
                   </th>
+                  ${analysis ? raw(`<th>
+                    <select id="f-ai">
+                      <option value="">(todos)</option>
+                      <option value="aplicar">Aplicar</option>
+                      <option value="revisar">Revisar</option>
+                      <option value="descartado">Descartado</option>
+                    </select>
+                  </th>`) : ''}
                   <th><input type="text" id="f-table" placeholder="Filtrar por tabla..."></th>
                   <th></th>
                 </tr>
@@ -197,8 +229,9 @@
           refreshSelection();
         };
 
-        const filterEls = ['f-name', 'f-table', 'f-type', 'f-status']
-          .map((id) => $(`#${id}`, root));
+        const filterEls = ['f-name', 'f-table', 'f-type', 'f-status', 'f-ai']
+          .map((id) => $(`#${id}`, root))
+          .filter(Boolean);
         const filtering = () => filterEls.some((el) => el.value !== '');
 
         function refreshSelection() {
@@ -283,6 +316,7 @@
           const table = $('#f-table', root).value.toLowerCase();
           const type = $('#f-type', root).value;
           const status = $('#f-status', root).value;
+          const ai = analysis ? $('#f-ai', root).value : '';
 
           // "Tabla" abarca la tabla y todo lo que cuelga de ella, y el estado
           // se mira en la tabla: "Tabla + Diferente" son los cambios de las
@@ -295,7 +329,8 @@
             const ok = (!name || tr.dataset.name.includes(name))
               && (!table || tr.dataset.table.includes(table))
               && (!type || (porTabla ? tr.dataset.tableStatus !== '' : tr.dataset.type === type))
-              && (!status || estadoDe(tr) === status);
+              && (!status || estadoDe(tr) === status)
+              && (!ai || tr.dataset.ai === ai);
             tr.style.display = ok ? '' : 'none';
           }
           refreshSelection();
@@ -402,9 +437,233 @@
         // Si se vuelve a abrir una comparación con script, se muestra al pulsar
         // "Generar script"; el contenido ya está cargado desde el historial.
         if (hasScript) setScriptTitle(run.selectedIds.length);
+
+        // --- Análisis con IA --------------------------------------------
+        const aiRun = $('#ai-run', root);
+        const aiCancel = $('#ai-cancel', root);
+        const aiStatus = $('#ai-status', root);
+        const aiStatusText = $('#ai-status-text', root);
+
+        aiRun.addEventListener('click', async () => {
+          const prsText = $('#ai-prs', root).value.trim();
+          if (!prsText) {
+            notify('Escribe al menos un PR.', 'error');
+            return;
+          }
+          const nPrs = prsText.split(/[\s,;]+/).filter(Boolean).length;
+          const ok = await window.api.confirm({
+            title: 'Análisis con IA',
+            message: `¿Analizar ${run.totalChanges} diferencias contra `
+              + `${nPrs === 1 ? '1 PR' : `${nPrs} PRs`}?`,
+            detail: 'Se leerán los PRs en GitHub y se enviarán a la API de Claude (Anthropic) '
+              + 'las diferencias de esta comparación junto con el código de los PRs; los '
+              + 'datos de las tablas no se envían. La selección actual se reemplaza por la '
+              + 'que haga la IA.',
+            confirmLabel: 'Analizar',
+          });
+          if (!ok) return;
+
+          aiRun.disabled = true;
+          aiCancel.hidden = false;
+          aiStatus.hidden = false;
+          aiStatusText.textContent = 'Preparando…';
+          const stop = window.api.ai.onProgress((message) => {
+            aiStatusText.textContent = message;
+          });
+          try {
+            const updated = await window.api.ai.analyze({ id: run.id, prsText });
+            const { included, review } = updated.analysis;
+            notify(`Análisis listo: ${included.length} diferencia(s) a aplicar y `
+              + `${review.length} a revisar. El script ya está generado con esa selección.`);
+            window.App.render();
+          } catch (error) {
+            notify(error.message, 'error');
+            aiRun.disabled = false;
+            aiCancel.hidden = true;
+            aiStatus.hidden = true;
+          } finally {
+            stop();
+          }
+        });
+        aiCancel.addEventListener('click', () => window.api.ai.cancel());
+
+        if (!analysis) return;
+
+        $('#ai-mark', root).addEventListener('click', () => {
+          const ids = new Set(analysis.included.map((item) => item.id));
+          for (const tr of rowsEls) boxOf(tr).checked = ids.has(tr.dataset.id);
+          refreshSelection();
+        });
+        $('#ai-script', root).addEventListener('click', () => {
+          if (hasScript) openModal();
+          else notify('Genera el script con «Generar script».', 'error');
+        });
+        $('#ai-copy', root).addEventListener('click', async (event) => {
+          const button = event.currentTarget;
+          if (!(await copyText(analysisText(run)))) {
+            notify('No se pudo copiar al portapapeles.', 'error');
+            return;
+          }
+          button.textContent = '✅ Copiado';
+          setTimeout(() => { button.textContent = '📋 Copiar análisis'; }, 1500);
+        });
+
+        // Pulsar una fila del análisis lleva a su diferencia en la grilla.
+        for (const item of $$('[data-goto]', root)) {
+          item.addEventListener('click', () => {
+            const target = rowsEls.find((tr) => tr.dataset.id === item.dataset.goto);
+            if (!target) return;
+            if (!isVisible(target)) {
+              for (const el of filterEls) el.value = '';
+              applyFilters();
+            }
+            showSql(target);
+            target.scrollIntoView({ block: 'center' });
+          });
+        }
       },
     };
   });
+
+  /** "tabla.columna" o solo el nombre, para los listados del análisis. */
+  function objectName(row) {
+    return row.table && row.table !== row.name ? `${row.table}.${row.name}` : row.name;
+  }
+
+  /** Tarjeta del análisis con IA: qué PRs analizar y, si ya se hizo, el resultado. */
+  function aiCard(run, { ai, github }) {
+    const analysis = run.analysis;
+    const ejemplo = github.defaultRepo || 'empresa/odoo-integraciones';
+    const placeholder = `https://github.com/${ejemplo}/pull/123\n${ejemplo}#124`
+      + `${github.defaultRepo ? '\n#125' : ''}`;
+
+    return html`
+      <div class="card" id="ai-card">
+        <div class="toolbar">
+          <h2 style="margin:0;">🤖 Análisis con IA</h2>
+          <span class="muted">deja marcadas solo las diferencias que explican los PRs</span>
+          <span class="spacer"></span>
+          <a class="btn secondary sm" data-route="#/configuracion">⚙ Configuración</a>
+        </div>
+        ${ai.hasKey ? '' : raw(html`<p class="notice">Falta la clave de la API de Claude.
+          <a class="btn secondary sm" data-route="#/configuracion">Configurarla</a></p>`)}
+
+        <label for="ai-prs">Pull Requests de Odoo</label>
+        <textarea id="ai-prs" rows="3" spellcheck="false"
+                  placeholder="${placeholder}">${analysis ? analysis.prsText : ''}</textarea>
+        <div class="muted">Uno por línea: la dirección del PR o <code>dueño/repo#número</code>${
+          github.defaultRepo ? raw(html`, o <code>#número</code> para ${github.defaultRepo}`) : ''}.</div>
+
+        <div class="form-actions">
+          <button type="button" class="btn" id="ai-run" ${ai.hasKey ? '' : raw('disabled')}>
+            🤖 ${analysis ? 'Volver a analizar' : 'Analizar con IA'}</button>
+          <button type="button" class="btn secondary" id="ai-cancel" hidden>Cancelar</button>
+          <span class="ai-status" id="ai-status" hidden>
+            <span class="spinner"></span><span id="ai-status-text"></span></span>
+        </div>
+
+        ${analysis ? raw(analysisHtml(run)) : ''}
+      </div>`;
+  }
+
+  /** Resultado del análisis: resumen, qué se aplica, qué revisar y riesgos. */
+  function analysisHtml(run) {
+    const a = run.analysis;
+    const byId = new Map(run.rows.map((row) => [row.id, row]));
+    const descartadas = run.totalChanges - a.included.length - a.review.length;
+    const usage = a.usage || {};
+
+    const fila = (item, conPr) => {
+      const row = byId.get(item.id) || { name: item.id, table: '', type: '', status: '' };
+      return raw(html`
+        <tr data-goto="${item.id}" title="Ver la diferencia en la grilla">
+          <td>${objectName(row)}</td>
+          <td>${row.type}</td>
+          <td><span class="badge ${row.statusClass}">${row.status}</span></td>
+          ${conPr ? raw(html`<td style="white-space:nowrap;">${item.pr}</td>`) : ''}
+          <td class="det">${item.reason}</td>
+        </tr>`);
+    };
+    const tabla = (items, conPr) => raw(html`
+      <div class="table-wrap"><table class="ai-table">
+        <thead><tr><th>Objeto</th><th>Tipo</th><th>Estado</th>
+          ${conPr ? raw('<th>PR</th>') : ''}<th>Motivo</th></tr></thead>
+        <tbody>${items.map((item) => fila(item, conPr))}</tbody>
+      </table></div>`);
+    const lista = (items) => raw(html`
+      <ul class="ai-list">${items.map((text) => raw(html`<li>${text}</li>`))}</ul>`);
+    const prs = a.prs.map((pr, i) => raw(html`${i ? ', ' : ''}<a href="${pr.url}"
+      target="_blank" rel="noreferrer" title="${pr.title}">${pr.ref}</a>${
+      pr.truncated ? ' (recortado)' : ''}`));
+
+    return html`
+      <div class="ai-result">
+        <p class="muted">Análisis del ${formatDate(a.createdAt)} con ${a.model} sobre ${prs}
+          · <strong>${a.included.length}</strong> a aplicar
+          · <strong>${a.review.length}</strong> a revisar
+          · ${descartadas} descartadas
+          · tokens: ${usage.input} de entrada, ${usage.cacheRead} de caché, ${usage.output} de salida</p>
+        ${a.warnings.map((warning) => raw(html`<p class="notice">⚠ ${warning}</p>`))}
+
+        <div class="toolbar">
+          <button type="button" class="btn sm" id="ai-mark">☑ Marcar solo lo que eligió la IA</button>
+          <button type="button" class="btn secondary sm" id="ai-script">📄 Ver script</button>
+          <button type="button" class="btn secondary sm" id="ai-copy">📋 Copiar análisis</button>
+        </div>
+
+        <h3>Resumen</h3>
+        <div class="ai-summary">${a.summary}</div>
+
+        ${a.prSummaries.length ? raw(html`
+          <h3>Qué cambia cada PR en la base</h3>
+          <ul class="ai-list">${a.prSummaries.map((pr) => raw(html`
+            <li><strong>${pr.ref}</strong>: <span class="ai-pre">${pr.dbChanges}</span></li>`))}</ul>`) : ''}
+
+        <h3>A aplicar (${a.included.length})</h3>
+        ${a.included.length
+          ? tabla(a.included, true)
+          : raw('<p class="muted">La IA no encontró diferencias que expliquen estos PRs.</p>')}
+
+        ${a.review.length ? raw(html`
+          <h3>A revisar (${a.review.length})</h3>
+          <p class="muted">No entran en el script: márcalas en la grilla si corresponden.</p>
+          ${tabla(a.review, false)}`) : ''}
+
+        ${a.missing.length ? raw(html`
+          <h3>Esperado y no encontrado (${a.missing.length})</h3>
+          <p class="muted">Cambios que los PRs deberían producir y que no aparecen entre las
+            diferencias: puede que BD1 ya los tenga o que BD2 no tenga el PR aplicado.</p>
+          ${lista(a.missing.map((m) => `${m.pr} · ${m.object}: ${m.note}`))}`) : ''}
+
+        ${a.risks.length ? raw(html`<h3>Riesgos</h3>${lista(a.risks)}`) : ''}
+      </div>`;
+  }
+
+  /** El análisis en texto plano, para pegarlo en un ticket o un correo. */
+  function analysisText(run) {
+    const a = run.analysis;
+    const byId = new Map(run.rows.map((row) => [row.id, row]));
+    const linea = (item) => {
+      const row = byId.get(item.id) || { name: item.id, table: '', type: '?', status: '?' };
+      return `- [${row.type} · ${row.status}] ${objectName(row)}`
+        + `${item.pr ? ` (${item.pr})` : ''}: ${item.reason}`;
+    };
+    const seccion = (title, lines) => (lines.length ? [title, ...lines, ''] : []);
+
+    return [
+      `Análisis con IA · ${run.db1Name} (destino) ← ${run.db2Name} (referencia)`,
+      `${formatDate(a.createdAt)} · ${a.model} · PRs: ${a.prs.map((pr) => pr.ref).join(', ')}`,
+      '',
+      ...seccion('Avisos:', a.warnings.map((w) => `- ${w}`)),
+      'Resumen:', a.summary, '',
+      ...seccion('Qué cambia cada PR:', a.prSummaries.map((pr) => `- ${pr.ref}: ${pr.dbChanges}`)),
+      `A aplicar (${a.included.length}):`, ...a.included.map(linea), '',
+      ...seccion(`A revisar (${a.review.length}):`, a.review.map(linea)),
+      ...seccion('Esperado y no encontrado:',
+        a.missing.map((m) => `- ${m.pr} · ${m.object}: ${m.note}`)),
+      ...seccion('Riesgos:', a.risks.map((r) => `- ${r}`)),
+    ].join('\n').trim();
+  }
 
   /** Botón "Re-ejecutar" de la cabecera. */
   function bindRerun(root, run) {

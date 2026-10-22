@@ -239,3 +239,74 @@ test('un data.json viejo, sin ajustes, sigue funcionando', () => {
   assert.equal(reabierto.settings().updates.enabled, true);
   assert.equal(reabierto.listConnections().length, 1);
 });
+
+/** Cifrador que deja ver si algo pasó por él. */
+const cifrador = {
+  encrypt: (text) => ({ enc: 'test', value: `cifrado:${text}` }),
+  decrypt: (blob) => (blob && blob.enc === 'test' ? blob.value.replace(/^cifrado:/, '') : ''),
+};
+
+function storeConCifrado() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pgcompare-test-'));
+  return { store: new Store(dir, { cipher: cifrador }), dir };
+}
+
+test('la clave de Claude y el token de GitHub se guardan cifrados y no salen a la interfaz', () => {
+  const { store, dir } = storeConCifrado();
+  const publico = store.saveIntegrations({
+    aiApiKey: 'sk-ant-123', aiModel: 'claude-sonnet-5-5',
+    githubUser: 'ana', githubToken: 'ghp_abc', githubDefaultRepo: 'acme/odoo-int',
+  });
+
+  assert.deepEqual(publico, {
+    ai: { model: 'claude-sonnet-5-5', hasKey: true },
+    github: { user: 'ana', defaultRepo: 'acme/odoo-int', hasToken: true },
+  });
+  assert.deepEqual(store.aiConfig(), { model: 'claude-sonnet-5-5', apiKey: 'sk-ant-123' });
+  assert.equal(store.githubConfig().token, 'ghp_abc');
+
+  const enDisco = fs.readFileSync(path.join(dir, 'data.json'), 'utf8');
+  assert.ok(!enDisco.includes('"sk-ant-123"'));
+  assert.ok(enDisco.includes('cifrado:sk-ant-123'));
+});
+
+test('un secreto vacío conserva el guardado y "borrar" lo quita', () => {
+  const { store } = storeConCifrado();
+  store.saveIntegrations({ aiApiKey: 'sk-ant-123', githubToken: 'ghp_abc' });
+
+  store.saveIntegrations({ aiApiKey: '', githubToken: '', githubUser: 'ana' });
+  assert.equal(store.aiConfig().apiKey, 'sk-ant-123');
+  assert.equal(store.githubConfig().token, 'ghp_abc');
+
+  store.saveIntegrations({ clearAiKey: true, clearGithubToken: true });
+  assert.equal(store.integrations().ai.hasKey, false);
+  assert.equal(store.integrations().github.hasToken, false);
+  assert.equal(store.aiConfig().model, 'claude-opus-5-5');
+});
+
+test('el repositorio por defecto tiene que ser dueño/repo', () => {
+  const { store } = storeConCifrado();
+  assert.throws(() => store.saveIntegrations({ githubDefaultRepo: 'https://github.com/acme' }),
+    /dueño\/repositorio/);
+});
+
+test('cambiar el aviso de versiones no toca la configuración de IA', () => {
+  const { store } = storeConCifrado();
+  store.saveIntegrations({ aiApiKey: 'sk-ant-123' });
+  store.updateSettings('updates', { enabled: false });
+  assert.equal(store.aiConfig().apiKey, 'sk-ant-123');
+  assert.equal(store.settings().updates.enabled, false);
+});
+
+test('el análisis con IA se guarda con la comparación', () => {
+  const { store } = newStore();
+  const run = store.createRun({
+    db1: { id: 1, name: 'A' }, db2: { id: 2, name: 'B' }, result: resultado(),
+  });
+  assert.equal(store.getRun(run.id).analysis, null);
+
+  const updated = store.saveAnalysis(run.id, { summary: 'ok', included: [{ id: 'x' }] });
+  assert.equal(updated.analysis.summary, 'ok');
+  assert.equal(updated.hasAnalysis, true);
+  assert.equal(store.listRuns()[0].hasAnalysis, true);
+});

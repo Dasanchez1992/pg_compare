@@ -79,16 +79,18 @@ tbody tr:hover { background:rgba(255,255,255,.03); }
 tbody tr:last-child td { border-bottom:none; }
 
 /* ---- Formularios ---- */
-input, select {
+input, select, textarea {
     width:100%; padding:.55rem .7rem; background:var(--card2); color:var(--text);
     border:1px solid var(--border); border-radius:var(--radius-sm);
     font-size:.95rem; transition:border-color .15s, box-shadow .15s;
 }
-input:focus, select:focus {
+input:focus, select:focus, textarea:focus {
     outline:none; border-color:var(--accent);
     box-shadow:0 0 0 3px var(--accent-soft);
 }
-input::placeholder { color:#5c7290; }
+input::placeholder, textarea::placeholder { color:#5c7290; }
+textarea { resize:vertical; min-height:4.5rem; line-height:1.45;
+           font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.88rem; }
 label { display:block; margin:.85rem 0 .3rem; font-weight:600; font-size:.9rem; }
 
 /* ---- Botones ---- */
@@ -330,3 +332,18 @@ button.btn { font-family:inherit; }
     border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; vertical-align:middle; }
 .update-progress > span { display:block; height:100%; width:0; background:var(--accent);
     transition:width .2s; }
+
+/* ---- Análisis con IA ---- */
+.b-ai { background:var(--accent-soft); color:var(--accent); border-color:rgba(56,189,248,.35); }
+.ai-status { display:inline-flex; align-items:center; gap:.55rem; color:var(--dim); font-size:.9rem; }
+.ai-result { margin-top:1.25rem; padding-top:1rem; border-top:1px solid var(--border); }
+.ai-result h3 { margin:1.35rem 0 .5rem; font-size:1rem; }
+.ai-summary, .ai-pre { white-space:pre-wrap; }
+.ai-summary { line-height:1.55; background:var(--card2); border:1px solid var(--border);
+              border-radius:var(--radius-sm); padding:.85rem 1rem; }
+.ai-list { margin:.25rem 0; padding-left:1.25rem; line-height:1.5; }
+.ai-list li + li { margin-top:.3rem; }
+.ai-table { font-size:.88rem; }
+.ai-table tbody tr { cursor:pointer; }
+.ai-table tbody tr:hover { background:var(--accent-soft); }
+.ai-table td.det { color:var(--dim); }

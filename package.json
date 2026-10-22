@@ -28,6 +28,7 @@
     "dist:linux": "electron-builder --linux"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.1.0",
     "pg": "^8.23.0"
   },
   "devDependencies": {
