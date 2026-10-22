@@ -316,8 +316,8 @@ compila en Windows y en Linux:
   DPAPI, libsecret/kwallet). Si el sistema no ofrece llavero, la aplicación
   lo avisa en la barra inferior y las guarda en texto plano.
 - Marca **Conectar con SSL** en la conexión si el servidor exige cifrado.
-- Solo se comparan tablas ordinarias (`relkind = 'r'`) del esquema indicado.
-  No se comparan vistas, secuencias, funciones ni triggers.
+- Solo se compara el esquema indicado en cada conexión. Lo que no se compara
+  (tipos RANGE, extensiones y permisos) está en *Qué no compara todavía*.
 - La comparación de índices/constraints usa el texto de `pg_get_indexdef` /
   `pg_get_constraintdef`: si las dos bases corren versiones muy distintas de
   PostgreSQL pueden aparecer falsos positivos por diferencias de formato.

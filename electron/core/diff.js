@@ -10,6 +10,11 @@
  * cada uno; el script final se arma con `buildScript()` usando solo los
  * cambios que marcó el usuario.
  *
+ * El orden del script es el orden en que `compare()` va llamando a `add()`:
+ * tipos, secuencias y funciones primero (una columna, un índice o una vista
+ * pueden usarlos), luego tablas, particiones, columnas, índices y constraints,
+ * después los triggers (necesitan su tabla y su función) y las vistas al final.
+ *
  * Las tablas nuevas se emiten con su definición completa (columnas +
  * constraints inline + índices). Las sentencias destructivas (DROP) se
  * generan comentadas.
@@ -34,47 +39,6 @@ const CONSTRAINT_PRIORITY = {
   'FOREIGN KEY': 3,
   EXCLUSION: 4,
 };
-
-// Grupos en el orden en que se emiten al script.
-const GROUP_ORDER = [
-  // Los tipos, los primeros de todos: una columna, una función o un dominio
-  // pueden usarlos.
-  'types_create',
-  'types_alter',
-  // Las secuencias van primero: una columna puede tener DEFAULT nextval(...).
-  'sequences_create',
-  'sequences_alter',
-  // Las funciones, antes que las tablas: pueden usarse en un DEFAULT, en el
-  // índice de una expresión o dentro de una vista.
-  'functions_create',
-  'functions_alter',
-  'tables_create',
-  'tables_drop',
-  // Las particiones, detrás de la tabla de la que cuelgan.
-  'partitions_create',
-  'partitions_alter',
-  'partitions_drop',
-  'columns_add',
-  'columns_alter',
-  'columns_drop',
-  'indexes_add',
-  'indexes_alter',
-  'indexes_drop',
-  'constraints_add',
-  'constraints_alter',
-  'constraints_drop',
-  // Los triggers, cuando ya existen su tabla y su función.
-  'triggers_create',
-  'triggers_alter',
-  'triggers_drop',
-  // Las vistas, al final: leen de las tablas que se acaban de crear o cambiar.
-  'views_create',
-  'views_alter',
-  'views_drop',
-  'functions_drop',
-  'sequences_drop',
-  'types_drop',
-];
 
 const DESTRUCTIVE_GROUPS = new Set([
   'tables_drop', 'columns_drop', 'indexes_drop', 'constraints_drop',
@@ -959,6 +923,5 @@ module.exports = {
   commentSql,
   literal,
   q,
-  GROUP_ORDER,
   GROUP_META,
 };
